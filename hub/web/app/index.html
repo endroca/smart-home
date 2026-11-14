@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1115" />
+    <script>
+      /* Boot do tema: roda antes do CSS/paint para não piscar o tema errado.
+         "auto" segue o prefers-color-scheme do sistema/PWA; "light"/"dark"
+         fixam a escolha. A mesma chave é lida pelo módulo de tema. */
+      (function () {
+        try {
+          var mode = localStorage.getItem("smart_home_theme") || "auto";
+          var dark =
+            mode === "dark" ||
+            (mode === "auto" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.classList.toggle("dark", dark);
+          root.classList.toggle("light", !dark);
+          root.dataset.theme = mode;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", dark ? "#0b1115" : "#f4f7f5");
+        } catch (e) {
+          /* localStorage indisponível: segue o default escuro do <html> */
+        }
+      })();
+    </script>
+    <title>Smart Home</title>
+    <meta name="description" content="Controle da casa inteligente: cômodos, dispositivos, automações e gateways." />
+    <meta name="application-name" content="smart home" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="smart home" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/assets/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png" />
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+  </head>
+  <body
+    class="app-body min-h-screen bg-surface font-body text-on-surface antialiased selection:bg-primary-container selection:text-on-primary-container"
+  >
+    <div class="ios-top-cover" aria-hidden="true"></div>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

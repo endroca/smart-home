@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smart-home.local/schemas/fan-state.schema.json",
+  "title": "Estado de um ventilador",
+  "description": "Estado absoluto de um sub-device (fan0..fan7), como o device o reporta ao hub em POST /api/things/<thing>/events (type=state). O device e a unica fonte de verdade; o hub apenas espelha.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["power", "light", "speed", "direction", "source", "updatedAt", "counter"],
+  "properties": {
+    "power": {
+      "type": "boolean"
+    },
+    "light": {
+      "type": "boolean"
+    },
+    "speed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "direction": {
+      "enum": ["forward", "reverse"]
+    },
+    "source": {
+      "description": "Origem da ultima mudanca conhecida. 'hub' e uma mudanca pedida pelo hub; 'http' e uma chamada a API local do device.",
+      "enum": ["hub", "http", "rf_remote", "correction", "boot"]
+    },
+    "updatedAt": {
+      "description": "Epoch em segundos (SNTP) do device no momento da ultima mudanca; 0 quando o relogio nao sincronizou.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "counter": {
+      "description": "Contador RF acumulado (0..7) usado pelo protocolo Ventisol.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 7
+    }
+  }
+}

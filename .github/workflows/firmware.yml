@@ -1,0 +1,39 @@
+name: firmware
+
+on:
+  push:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup python
+        if: hashFiles('firmware/smart_control/platformio.ini') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install platformio
+        if: hashFiles('firmware/smart_control/platformio.ini') != ''
+        run: pip install platformio
+
+      - name: build
+        if: hashFiles('firmware/smart_control/platformio.ini') != ''
+        run: pio run -d firmware/smart_control
+
+      - name: upload artifact
+        if: hashFiles('firmware/smart_control/platformio.ini') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart_control-firmware
+          path: firmware/smart_control/.pio/build/*/firmware.bin
+          if-no-files-found: error

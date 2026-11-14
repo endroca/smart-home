@@ -1,0 +1,38 @@
+# Unit systemd do hub smart_home na Raspberry Pi.
+# Instalada por deploy/install.sh (bootstrap) em /etc/systemd/system/.
+[Unit]
+Description=smart_home hub
+After=network-online.target
+Wants=network-online.target
+# Nunca desiste de reiniciar (desativa o limite de "reinicios demais").
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=smart-home
+Group=smart-home
+WorkingDirectory=/opt/smart-home-hub
+# Cria /var/lib/smart-home-hub com o dono correto e o torna gravavel.
+StateDirectory=smart-home-hub
+Environment=HUB_CONFIG=/etc/smart-home-hub/config.json
+Environment=HUB_DB=/var/lib/smart-home-hub/hub.db
+Environment=HUB_FIRMWARE_DIR=/opt/smart-home-hub/firmware
+ExecStart=/opt/smart-home-hub/smart-home-hub -config /etc/smart-home-hub/config.json
+# Sobe no boot e reinicia sempre que o processo sair/crashar.
+Restart=always
+RestartSec=5
+
+# Endurecimento: o servico so precisa escrever no diretorio de estado.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/smart-home-hub
+
+# A porta 80 e privilegiada (<1024): concede apenas o bind de porta baixa, sem
+# rodar como root. Sobrevive a cada deploy (fica na unit, nao no binario).
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smart-home.local/schemas/status.schema.json",
+  "title": "Status do smart_control",
+  "description": "Status do gateway, empurrado ao hub em POST /api/things/<thing>/events (type=status). O hub marca offline quando o heartbeat atrasa.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["online", "thing"],
+  "properties": {
+    "online": {
+      "type": "boolean"
+    },
+    "thing": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ip": {
+      "type": "string",
+      "maxLength": 45
+    },
+    "rssi": {
+      "type": "integer",
+      "minimum": -120,
+      "maximum": 0
+    },
+    "heap": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "uptime": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "manifestVersion": {
+      "description": "Versao do manifesto anunciada pelo device; o hub rele a descoberta quando ela muda.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "ota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": ["idle", "downloading", "verifying", "applying", "error"]
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    }
+  }
+}

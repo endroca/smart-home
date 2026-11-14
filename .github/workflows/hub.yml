@@ -1,0 +1,68 @@
+name: hub
+
+on:
+  push:
+    paths:
+      - "hub/**"
+      - ".github/workflows/hub.yml"
+  pull_request:
+    paths:
+      - "hub/**"
+      - ".github/workflows/hub.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup go
+        if: hashFiles('hub/go.mod') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      # O front e compilado ANTES dos passos Go: web/dist nao e versionado e
+      # o binario Go o embute (os alvos do Makefile dependem de web-assets).
+      - name: setup node
+        if: hashFiles('hub/web/app/package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: hub/web/app/package-lock.json
+
+      - name: web install
+        if: hashFiles('hub/web/app/package.json') != ''
+        working-directory: hub/web/app
+        run: npm ci
+
+      - name: web build
+        if: hashFiles('hub/web/app/package.json') != ''
+        working-directory: hub/web/app
+        run: npm run build
+
+      - name: web test
+        if: hashFiles('hub/web/app/package.json') != ''
+        working-directory: hub/web/app
+        run: npm test
+
+      - name: build
+        if: hashFiles('hub/go.mod') != ''
+        working-directory: hub
+        run: go build ./...
+
+      - name: vet
+        if: hashFiles('hub/go.mod') != ''
+        working-directory: hub
+        run: go vet ./...
+
+      - name: test
+        if: hashFiles('hub/go.mod') != ''
+        working-directory: hub
+        run: go test ./...
+
+      - name: build armv7
+        if: hashFiles('hub/go.mod') != ''
+        working-directory: hub
+        run: GOOS=linux GOARCH=arm GOARM=7 go build -o /tmp/smart-home-hub-arm ./cmd/smart-home-hub

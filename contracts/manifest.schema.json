@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smart-home.local/schemas/manifest.schema.json",
+  "title": "Manifesto de descoberta do smart_control",
+  "description": "Servido em GET /api/manifest. Descreve o gateway e os sub-devices logicos que ele controla. O id do sub-device e a identidade estavel; o nome e apenas exibicao.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestVersion",
+    "thing",
+    "model",
+    "protocol",
+    "firmware",
+    "http",
+    "actions",
+    "devices"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 2
+    },
+    "manifestVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "thing": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "protocol": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "firmware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "build"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "build": {
+          "type": "string",
+          "maxLength": 128
+        }
+      }
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mdns", "port"],
+      "properties": {
+        "mdns": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+\\.local$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "events": {
+      "description": "O que o device empurra para o hub em POST /api/things/<thing>/events.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "boolean" },
+        "status": { "type": "boolean" },
+        "heartbeat": {
+          "description": "Intervalo do heartbeat de status, em segundos.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["fan.add", "fan.remove", "config.get", "config.set", "reboot", "ota.install"]
+      }
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/device"
+      }
+    }
+  },
+  "$defs": {
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "name", "capabilities", "actions"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "capabilities": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/capability"
+          }
+        },
+        "actions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["state.correct", "learn.start", "learn.cancel", "fan.rename"]
+          }
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["switch", "enum", "number", "text"]
+        },
+        "stateful": {
+          "type": "boolean",
+          "default": true
+        },
+        "writable": {
+          "type": "boolean",
+          "default": true
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "unit": {
+          "type": "string",
+          "maxLength": 16
+        }
+      }
+    }
+  }
+}

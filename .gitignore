@@ -1,0 +1,47 @@
+# --- Segredos / ambiente ---
+.env
+.env.*
+
+# --- PlatformIO / Arduino ---
+.pio/
+
+# --- SO / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+
+# --- Front do hub (Svelte/Vite) ---
+# node_modules nunca entra. hub/web/dist/ e GERADO pelo build do front
+# ('make web', 'make dev-web' ou 'make deploy') e embutido no binario Go; nao
+# vai para o git. Os alvos Go dependem de 'web-assets', que compila o front se
+# o dist estiver ausente.
+node_modules/
+hub/web/dist/
+hub/web/app/.vite/
+hub/web/app/coverage/
+
+# --- Hub local ---
+hub/config.json
+hub/hub-data.json
+hub/firmware/
+hub/*.bin
+
+# Binarios de build: nunca versionar. O binario local sai de 'make build' e o
+# armv7 de 'make build-arm'.
+hub/smart-home-hub
+hub/smart-home-hub-linux-armv7
+hub/dist/
+hub/deploy/deploy.env
+
+# --- Banco SQLite (contem local_keys) ---
+hub/data/
+*.db
+*.db-wal
+*.db-shm
+
+# --- Saida do tinytuya wizard (contem API Key/Secret e local_keys) ---
+hub/devices.json
+tinytuya.json
+devices.json
+tuya-raw.json
+snapshot.json

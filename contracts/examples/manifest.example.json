@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "manifestVersion": 7,
+  "thing": "smart-control-rf01",
+  "model": "smart_control_esp32",
+  "protocol": "ventisol-18639",
+  "firmware": {
+    "version": "1.0.0",
+    "build": "2026-11-03T18:00:00Z"
+  },
+  "http": {
+    "mdns": "smart-control-rf01.local",
+    "port": 80
+  },
+  "events": { "state": true, "status": true, "heartbeat": 30 },
+  "actions": ["fan.add", "fan.remove", "config.get", "config.set", "reboot", "ota.install"],
+  "devices": [
+    {
+      "id": "fan0",
+      "type": "ceiling_fan",
+      "name": "Ventilador Sala",
+      "capabilities": {
+        "power": { "kind": "switch", "stateful": true, "writable": true },
+        "light": { "kind": "switch", "stateful": true, "writable": true },
+        "speed": { "kind": "number", "stateful": true, "writable": true, "min": 0, "max": 6, "step": 1 },
+        "direction": { "kind": "enum", "stateful": true, "writable": true, "values": ["forward", "reverse"] }
+      },
+      "actions": ["state.correct", "learn.start", "learn.cancel", "fan.rename"]
+    },
+    {
+      "id": "fan1",
+      "type": "ceiling_fan",
+      "name": "Ventilador Quarto",
+      "capabilities": {
+        "power": { "kind": "switch", "stateful": true, "writable": true },
+        "light": { "kind": "switch", "stateful": true, "writable": true },
+        "speed": { "kind": "number", "stateful": true, "writable": true, "min": 0, "max": 6, "step": 1 },
+        "direction": { "kind": "enum", "stateful": true, "writable": true, "values": ["forward", "reverse"] }
+      },
+      "actions": ["state.correct", "learn.start", "learn.cancel", "fan.rename"]
+    }
+  ]
+}

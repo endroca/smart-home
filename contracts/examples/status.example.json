@@ -1,0 +1,15 @@
+{
+  "online": true,
+  "thing": "smart-control-rf01",
+  "version": "1.0.0",
+  "ts": 1762286400,
+  "ip": "192.168.1.42",
+  "rssi": -61,
+  "heap": 142000,
+  "uptime": 12345,
+  "manifestVersion": 7,
+  "ota": {
+    "state": "idle",
+    "version": "1.0.0"
+  }
+}

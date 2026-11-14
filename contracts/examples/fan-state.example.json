@@ -1,0 +1,9 @@
+{
+  "power": true,
+  "light": false,
+  "speed": 3,
+  "direction": "forward",
+  "source": "rf_remote",
+  "updatedAt": 1762286400,
+  "counter": 4
+}

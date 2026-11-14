@@ -1,0 +1,225 @@
+/* Tokens de tema do hub.
+ *
+ * As cores do design system são expostas como variáveis CSS no formato
+ * "R G B" (sem rgb()), para que o Tailwind as use como
+ * rgb(var(--token) / <alpha-value>) — assim os modificadores de opacidade
+ * (bg-primary/30, border-outline-variant/50, ...) continuam funcionando.
+ *
+ * O tema é escolhido em runtime e refletido na classe do <html>:
+ *   .dark   -> tema escuro (padrão histórico do hub)
+ *   .light  -> tema claro
+ * "Auto" acompanha o prefers-color-scheme do sistema/PWA e alterna a classe.
+ *
+ * O bloco :root carrega os valores escuros (default) para o primeiro paint
+ * antes do JS rodar; o script de boot em index.html ajusta a classe cedo.
+ */
+
+:root,
+.dark {
+  --sh-surface: 11 17 21;
+  --sh-surface-dim: 11 17 21;
+  --sh-surface-bright: 44 58 58;
+  --sh-surface-container-lowest: 7 13 17;
+  --sh-surface-container-low: 17 26 31;
+  --sh-surface-container: 23 31 36;
+  --sh-surface-container-high: 32 42 48;
+  --sh-surface-container-highest: 42 53 58;
+  --sh-surface-variant: 42 53 58;
+  --sh-background: 11 17 21;
+  --sh-on-background: 232 239 237;
+  --sh-on-surface: 232 239 237;
+  --sh-on-surface-variant: 170 185 181;
+  --sh-outline: 113 130 126;
+  --sh-outline-variant: 47 61 59;
+  --sh-primary: 57 223 169;
+  --sh-primary-container: 25 189 139;
+  --sh-on-primary: 5 38 29;
+  --sh-on-primary-container: 4 36 26;
+  --sh-primary-fixed: 111 251 190;
+  --sh-primary-fixed-dim: 57 223 169;
+  --sh-on-primary-fixed: 0 33 19;
+  --sh-secondary: 54 205 232;
+  --sh-secondary-container: 10 165 191;
+  --sh-on-secondary: 0 47 56;
+  --sh-on-secondary-container: 0 61 71;
+  --sh-tertiary: 255 184 78;
+  --sh-tertiary-container: 226 145 0;
+  --sh-on-tertiary: 71 42 0;
+  --sh-on-tertiary-container: 82 50 0;
+  --sh-error: 239 133 128;
+  --sh-error-container: 147 0 10;
+  --sh-on-error: 69 13 11;
+  --sh-on-error-container: 255 218 214;
+  --sh-inverse-surface: 232 239 237;
+  --sh-inverse-on-surface: 27 38 41;
+  --sh-inverse-primary: 0 108 73;
+
+  /* Cores estruturais dos "vidros" e do chrome (header, bottom nav, fundo).
+     Não são expostas como utilitário Tailwind; o CSS inline em index.html
+     as consome diretamente. */
+  --sh-app-bg: 11 17 21;
+  --sh-header-bg: 11 17 21;
+  --sh-room-bar-bg: 11 17 21;
+  --sh-nav-bg: 9 16 20;
+  --sh-glass-card-hi: 34 49 52;
+  --sh-glass-card-lo: 17 27 31;
+  --sh-glass-panel-hi: 30 44 46;
+  --sh-glass-panel-lo: 14 23 27;
+  --sh-hairline: 181 220 208;
+  --sh-hairline-soft: 181 220 208;
+  --sh-icon-fg: 197 210 206;
+  --sh-icon-hi: 232 239 237;
+  --sh-overlay-hi: 255 255 255;
+  --sh-overlay-lo: 255 255 255;
+  --sh-on-badge-gradient: 255 255 255;
+  --sh-ambient-1: 22 100 79;
+  --sh-ambient-2: 17 86 77;
+  --sh-shadow: 0 0 0;
+  --sh-theme-color: #0b1115;
+
+  /* Gradiente dos controles "ligados" (velocidade do ventilador, dial de
+     tomada). No escuro é o esmeralda brilhante com texto escuro; no claro é
+     um esmeralda profundo com texto branco, para manter o contraste. */
+  --sh-accent-hi: 111 251 190;
+  --sh-accent: 57 223 169;
+  --sh-accent-lo: 25 189 139;
+}
+
+.light {
+  --sh-surface: 244 247 245;
+  --sh-surface-dim: 232 238 235;
+  --sh-surface-bright: 255 255 255;
+  --sh-surface-container-lowest: 255 255 255;
+  --sh-surface-container-low: 247 250 249;
+  --sh-surface-container: 240 245 243;
+  --sh-surface-container-high: 231 238 235;
+  --sh-surface-container-highest: 219 229 225;
+  --sh-surface-variant: 219 229 225;
+  --sh-background: 244 247 245;
+  --sh-on-background: 23 38 34;
+  --sh-on-surface: 23 38 34;
+  --sh-on-surface-variant: 84 104 98;
+  --sh-outline: 128 147 141;
+  --sh-outline-variant: 205 218 213;
+  --sh-primary: 10 125 89;
+  --sh-primary-container: 111 251 190;
+  --sh-on-primary: 255 255 255;
+  --sh-on-primary-container: 0 66 44;
+  --sh-primary-fixed: 111 251 190;
+  --sh-primary-fixed-dim: 57 223 169;
+  --sh-on-primary-fixed: 0 33 19;
+  --sh-secondary: 8 126 148;
+  --sh-secondary-container: 178 235 246;
+  --sh-on-secondary: 255 255 255;
+  --sh-on-secondary-container: 0 54 64;
+  --sh-tertiary: 150 96 0;
+  --sh-tertiary-container: 255 221 171;
+  --sh-on-tertiary: 255 255 255;
+  --sh-on-tertiary-container: 71 42 0;
+  --sh-error: 190 40 35;
+  --sh-error-container: 255 218 214;
+  --sh-on-error: 255 255 255;
+  --sh-on-error-container: 104 0 6;
+  --sh-inverse-surface: 27 38 41;
+  --sh-inverse-on-surface: 232 239 237;
+  --sh-inverse-primary: 57 223 169;
+
+  --sh-app-bg: 240 245 243;
+  --sh-header-bg: 255 255 255;
+  --sh-room-bar-bg: 244 247 245;
+  --sh-nav-bg: 255 255 255;
+  --sh-glass-card-hi: 255 255 255;
+  --sh-glass-card-lo: 243 248 246;
+  --sh-glass-panel-hi: 255 255 255;
+  --sh-glass-panel-lo: 245 249 247;
+  --sh-hairline: 60 90 82;
+  --sh-hairline-soft: 68 100 90;
+  --sh-icon-fg: 74 96 89;
+  --sh-icon-hi: 20 34 30;
+  --sh-overlay-hi: 60 90 82;
+  --sh-overlay-lo: 60 90 82;
+  --sh-on-badge-gradient: 255 255 255;
+  --sh-ambient-1: 57 223 169;
+  --sh-ambient-2: 54 205 232;
+  --sh-shadow: 40 60 55;
+  --sh-theme-color: #f4f7f5;
+
+  --sh-accent-hi: 16 132 97;
+  --sh-accent: 10 118 84;
+  --sh-accent-lo: 8 102 72;
+}
+
+/* Sombras do tema claro.
+ *
+ * As regras base (no <style> de index.html) usam a mesma linguagem de sombra do
+ * escuro, com alphas pensados para fundo preto. Sobre superfícies claras isso
+ * pesa demais, então aqui reduzimos a intensidade quando o <html> está em
+ * .light. O seletor com a classe extra tem especificidade maior e vence as
+ * regras base, sem precisar tocar no CSS compartilhado. */
+.light .glass-card {
+  box-shadow:
+    0 8px 22px rgb(var(--sh-shadow) / 0.1),
+    0 2px 6px rgb(var(--sh-shadow) / 0.06),
+    inset 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.light .glass-panel {
+  box-shadow:
+    0 14px 40px rgb(var(--sh-shadow) / 0.16),
+    inset 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.light .app-header {
+  box-shadow: 0 4px 16px rgb(var(--sh-shadow) / 0.06);
+}
+
+.light .bottom-nav {
+  box-shadow:
+    0 -6px 22px rgb(var(--sh-shadow) / 0.08),
+    inset 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.light #toast {
+  box-shadow: 0 8px 24px rgb(var(--sh-shadow) / 0.18);
+}
+
+.light .ctrl-console {
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.6),
+    inset 0 -1px rgb(var(--sh-shadow) / 0.12);
+}
+
+.light .speed-track {
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.6),
+    inset 0 -2px 6px rgb(var(--sh-shadow) / 0.12);
+}
+
+/* ---------------------------------------------------------------------------
+ * Utilitários de sombra com tema.
+ *
+ * Os templates usavam shadow-[...] literais (com rgba/#hex fixos), o que
+ * deixava os realces "apagados" no claro. Estas classes centralizam a sombra.
+ *
+ * TESTE: as sombras dos BOTÕES (tiles ativos, segmentos, dial e glows) foram
+ * removidas nos dois temas. Restam apenas o indicador de status e o relevo
+ * interno dos displays, que não são botões.
+ * ------------------------------------------------------------------------- */
+
+/* Ponto de status "ao vivo" (MQTT/online) — indicador, não botão. */
+.glow-dot {
+  box-shadow: 0 0 8px rgb(var(--sh-primary) / 0.85);
+}
+
+/* Relevo interno dos displays (ex.: leitura do ar-condicionado). */
+.display-inset {
+  box-shadow: inset 0 2px 4px rgb(var(--sh-shadow) / 0.5);
+}
+
+.light .glow-dot {
+  box-shadow: 0 0 6px rgb(var(--sh-primary) / 0.5);
+}
+
+.light .display-inset {
+  box-shadow: inset 0 1px 2px rgb(var(--sh-shadow) / 0.14);
+}

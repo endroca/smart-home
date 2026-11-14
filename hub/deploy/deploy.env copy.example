@@ -1,0 +1,26 @@
+# Configuracao de deploy do hub para a Raspberry Pi.
+#
+# Copie para deploy.env (ignorado pelo git) e ajuste:
+#   cp deploy/deploy.env.example deploy/deploy.env
+#
+# Os scripts deploy.sh, seed-db.sh e install-pi.sh carregam este arquivo
+# automaticamente. Variaveis ja exportadas no ambiente tem precedencia.
+
+# --- Alvo ---
+# Host da Pi: IP da LAN, nome mDNS (smart-home-hub.local) ou MagicDNS do Tailscale.
+PI_HOST=smart-home-hub.local
+# Usuario SSH com sudo na Pi.
+PI_USER=pi
+
+# --- Servico na Pi (mantenha em sincronia com smart-home-hub.service) ---
+SERVICE_NAME=smart-home-hub
+SERVICE_USER=smart-home
+INSTALL_DIR=/opt/smart-home-hub
+CONFIG_DIR=/etc/smart-home-hub
+STATE_DIR=/var/lib/smart-home-hub
+
+# --- Opcional ---
+# URL usada no health check pos-deploy. Vazio = http://<PI_HOST>:8080/api/health
+HEALTH_URL=
+# Banco SQLite local usado por 'make seed-db'. Vazio = hub/hub.db
+DB_SRC=

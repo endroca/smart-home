@@ -1,0 +1,977 @@
+/* Design system do hub (Tailwind v4 + tokens do tema).
+ *
+ * Os tokens de cor vivem em ./theme.css (formato "R G B") e o tema e escolhido
+ * em runtime pela classe do <html> (.dark / .light). Aqui so mapeamos esses
+ * tokens para o vocabulario do Tailwind, mantendo os mesmos nomes de utilitario
+ * que o front antigo usava (bg-surface-container, text-on-surface-variant,
+ * border-outline-variant, p-space-md, text-label-sm, ...).
+ */
+@import "tailwindcss";
+@import "./theme.css";
+
+@plugin "@tailwindcss/forms";
+
+/* Substitui o darkMode:"class" do Tailwind v3. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Escaneia os componentes e o shell. */
+@source "../../index.html";
+@source "../";
+
+@theme {
+  /* --- superficies --- */
+  --color-surface: rgb(var(--sh-surface));
+  --color-surface-dim: rgb(var(--sh-surface-dim));
+  --color-surface-bright: rgb(var(--sh-surface-bright));
+  --color-surface-container-lowest: rgb(var(--sh-surface-container-lowest));
+  --color-surface-container-low: rgb(var(--sh-surface-container-low));
+  --color-surface-container: rgb(var(--sh-surface-container));
+  --color-surface-container-high: rgb(var(--sh-surface-container-high));
+  --color-surface-container-highest: rgb(var(--sh-surface-container-highest));
+  --color-surface-variant: rgb(var(--sh-surface-variant));
+  --color-background: rgb(var(--sh-background));
+  --color-on-background: rgb(var(--sh-on-background));
+  --color-on-surface: rgb(var(--sh-on-surface));
+  --color-on-surface-variant: rgb(var(--sh-on-surface-variant));
+  --color-outline: rgb(var(--sh-outline));
+  --color-outline-variant: rgb(var(--sh-outline-variant));
+
+  /* --- cores semanticas --- */
+  --color-primary: rgb(var(--sh-primary));
+  --color-primary-container: rgb(var(--sh-primary-container));
+  --color-on-primary: rgb(var(--sh-on-primary));
+  --color-on-primary-container: rgb(var(--sh-on-primary-container));
+  --color-primary-fixed: rgb(var(--sh-primary-fixed));
+  --color-primary-fixed-dim: rgb(var(--sh-primary-fixed-dim));
+  --color-on-primary-fixed: rgb(var(--sh-on-primary-fixed));
+  --color-secondary: rgb(var(--sh-secondary));
+  --color-secondary-container: rgb(var(--sh-secondary-container));
+  --color-on-secondary: rgb(var(--sh-on-secondary));
+  --color-on-secondary-container: rgb(var(--sh-on-secondary-container));
+  --color-tertiary: rgb(var(--sh-tertiary));
+  --color-tertiary-container: rgb(var(--sh-tertiary-container));
+  --color-on-tertiary: rgb(var(--sh-on-tertiary));
+  --color-on-tertiary-container: rgb(var(--sh-on-tertiary-container));
+  --color-error: rgb(var(--sh-error));
+  --color-error-container: rgb(var(--sh-error-container));
+  --color-on-error: rgb(var(--sh-on-error));
+  --color-on-error-container: rgb(var(--sh-on-error-container));
+  --color-inverse-surface: rgb(var(--sh-inverse-surface));
+  --color-inverse-on-surface: rgb(var(--sh-inverse-on-surface));
+  --color-inverse-primary: rgb(var(--sh-inverse-primary));
+
+  /* --- aliases "brand" (compat com templates antigos) --- */
+  --color-brand-bg: rgb(var(--sh-surface));
+  --color-brand-card: rgb(var(--sh-surface-container));
+  --color-brand-card2: rgb(var(--sh-surface-container-low));
+  --color-brand-border: rgb(var(--sh-outline-variant));
+  --color-brand-emerald: rgb(var(--sh-primary-container));
+  --color-brand-emeraldLight: rgb(var(--sh-primary));
+  --color-brand-amber: rgb(var(--sh-tertiary));
+  --color-brand-amberLight: rgb(var(--sh-tertiary));
+  --color-brand-ruby: rgb(var(--sh-error));
+
+  /* --- tipografia --- */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+  --font-headline: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
+  --font-body-lg: var(--font-body);
+  --font-body-md: var(--font-body);
+  --font-body-sm: var(--font-body);
+  --font-headline-lg: var(--font-headline);
+  --font-headline-md: var(--font-headline);
+  --font-headline-sm: var(--font-headline);
+  --font-headline-lg-mobile: var(--font-headline);
+  --font-label-lg: var(--font-mono);
+  --font-label-md: var(--font-mono);
+  --font-label-sm: var(--font-mono);
+
+  /* --- escala tipografica --- */
+  --text-headline-lg: 32px;
+  --text-headline-lg--line-height: 40px;
+  --text-headline-lg--font-weight: 700;
+  --text-headline-lg-mobile: 27px;
+  --text-headline-lg-mobile--line-height: 34px;
+  --text-headline-lg-mobile--font-weight: 700;
+  --text-headline-md: 23px;
+  --text-headline-md--line-height: 30px;
+  --text-headline-md--font-weight: 650;
+  --text-headline-sm: 18px;
+  --text-headline-sm--line-height: 26px;
+  --text-headline-sm--font-weight: 600;
+  --text-body-lg: 16px;
+  --text-body-lg--line-height: 24px;
+  --text-body-md: 14px;
+  --text-body-md--line-height: 20px;
+  --text-body-sm: 12px;
+  --text-body-sm--line-height: 17px;
+  --text-label-lg: 15px;
+  --text-label-lg--line-height: 20px;
+  --text-label-lg--font-weight: 600;
+  --text-label-md: 13px;
+  --text-label-md--line-height: 18px;
+  --text-label-md--font-weight: 500;
+  --text-label-sm: 12px;
+  --text-label-sm--line-height: 16px;
+  --text-label-sm--font-weight: 500;
+
+  /* --- espacamento --- */
+  --spacing-space-xs: 0.25rem;
+  --spacing-space-sm: 0.5rem;
+  --spacing-space-md: 0.75rem;
+  --spacing-space-lg: 1.35rem;
+  --spacing-space-xl: 1.75rem;
+  --spacing-gutter: 0.75rem;
+  --spacing-margin: 1rem;
+}
+
+/* ---------- estilos de componente (portados do index.html antigo) ---------- */
+
+      .tok-mask {
+        -webkit-text-security: disc;
+      }
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      .press:active {
+        transform: scale(0.97);
+      }
+      [data-press],
+      [data-hold] {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+        touch-action: manipulation;
+      }
+      .pt-safe {
+        padding-top: env(safe-area-inset-top, 0px);
+      }
+      .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      /* O padding do <main> reserva o respiro abaixo do header (que agora rola
+         junto com a página) e acima da bottom nav fixa. */
+      .pb-nav {
+        padding-bottom: calc(6.375rem + env(safe-area-inset-bottom, 0px));
+      }
+      /* iOS 27 desenha um blur de sistema sobre o topo do PWA instalado,
+         independente do CSS da página. Um elemento fixo e pintado nos
+         primeiros pixels (receita difundida para o iOS 27) faz o WebKit parar
+         de aplicar o blur. Fora do modo standalone fica oculto. */
+      .ios-top-cover {
+        display: none;
+      }
+      @media (display-mode: standalone) {
+        .ios-top-cover {
+          display: block;
+          position: fixed;
+          inset: 0 0 auto;
+          z-index: 60;
+          height: 11px;
+          pointer-events: none;
+          background-color: rgb(var(--sh-header-bg));
+          -webkit-background-clip: text;
+          background-clip: text;
+        }
+      }
+
+      /* ---------- glass / superfícies ---------- */
+
+      html {
+        background-color: rgb(var(--sh-app-bg));
+      }
+
+      body.app-body {
+        overflow-x: clip;
+        background-color: rgb(var(--sh-app-bg));
+        background-image:
+          radial-gradient(ellipse at 80% 5%, rgb(var(--sh-ambient-1) / 0.16), transparent 32%),
+          radial-gradient(ellipse at 15% 75%, rgb(var(--sh-ambient-2) / 0.12), transparent 34%);
+        background-attachment: fixed;
+      }
+
+      .glass-card {
+        background: linear-gradient(145deg, rgb(var(--sh-glass-card-hi) / 0.78), rgb(var(--sh-glass-card-lo) / 0.88) 65%);
+        border: 1px solid rgb(var(--sh-hairline) / 0.14);
+        box-shadow:
+          0 18px 45px rgb(var(--sh-shadow) / 0.28),
+          inset 0 1px rgba(255, 255, 255, 0.05);
+        -webkit-backdrop-filter: blur(18px) saturate(135%);
+        backdrop-filter: blur(18px) saturate(135%);
+      }
+
+      .glass-panel {
+        background: linear-gradient(145deg, rgb(var(--sh-glass-panel-hi) / 0.94), rgb(var(--sh-glass-panel-lo) / 0.96) 65%);
+        border: 1px solid rgb(var(--sh-hairline) / 0.16);
+        box-shadow:
+          0 28px 70px rgb(var(--sh-shadow) / 0.45),
+          inset 0 1px rgba(255, 255, 255, 0.05);
+        -webkit-backdrop-filter: blur(24px) saturate(135%);
+        backdrop-filter: blur(24px) saturate(135%);
+      }
+
+      /* Modais: largura sempre dentro da viewport e altura limitada pela área
+         útil do aparelho (dvh desconta a barra do navegador no celular). */
+      .modal-responsive {
+        width: calc(100vw - 1.5rem);
+        max-height: calc(100vh - 1.5rem);
+        max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 1.5rem);
+        margin: auto;
+        overflow: hidden;
+        overscroll-behavior: contain;
+      }
+
+      .modal-responsive[open] {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .modal-scroll {
+        min-height: 0;
+        overscroll-behavior: contain;
+        scrollbar-color: rgb(var(--sh-primary) / 0.35) transparent;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .modal-scroll::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+
+      .modal-scroll::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: rgb(var(--sh-primary) / 0.3);
+      }
+
+      .modal-scroll::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      /* Foco dos modais: o anel azul do navegador destoa do tema. Usa o
+         primary e o mesmo raio do botão. */
+      dialog:focus-visible {
+        outline: none;
+      }
+
+      dialog button:focus {
+        outline: none;
+      }
+
+      dialog button:focus-visible {
+        outline: 2px solid rgb(var(--sh-primary) / 0.45);
+        outline-offset: 2px;
+      }
+
+      dialog input:focus,
+      dialog textarea:focus,
+      dialog select:focus {
+        border-color: rgb(var(--sh-primary) / 0.45);
+        --tw-ring-color: rgb(var(--sh-primary) / 0.35);
+      }
+
+      .icon-badge {
+        background: linear-gradient(145deg, rgb(var(--sh-overlay-hi) / 0.085), rgb(var(--sh-overlay-lo) / 0.02));
+        border: 1px solid rgb(var(--sh-hairline) / 0.14);
+        box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+      }
+
+      /* ---------- header ---------- */
+
+      /* Header sólido (sem blur): com a status bar style "black" o iOS pinta a
+         faixa superior com a cor do header e não cria a emenda de blur. */
+      .app-header {
+        border-bottom: 1px solid rgb(var(--sh-hairline) / 0.08);
+        background: rgb(var(--sh-header-bg));
+        box-shadow: 0 10px 30px rgb(var(--sh-shadow) / 0.18);
+      }
+
+      .logo-badge {
+        display: grid;
+        width: 44px;
+        height: 44px;
+        flex: none;
+        place-items: center;
+        border: 2px solid rgb(var(--sh-primary));
+        border-radius: 15px;
+        color: rgb(var(--sh-primary));
+        background: linear-gradient(145deg, rgb(var(--sh-primary) / 0.09), rgb(var(--sh-primary) / 0.01));
+        box-shadow: 0 0 24px rgb(var(--sh-primary) / 0.14);
+      }
+
+      .brand-title {
+        margin: 0;
+        font-size: 25px;
+        font-weight: 750;
+        line-height: 1.1;
+        letter-spacing: -0.6px;
+        white-space: nowrap;
+      }
+
+      .brand-sub {
+        margin-top: 2px;
+        color: rgb(var(--sh-primary));
+        font-size: 14px;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+
+      .icon-btn {
+        display: grid;
+        width: 40px;
+        height: 40px;
+        flex: none;
+        place-items: center;
+        border: 1px solid rgb(var(--sh-hairline) / 0.13);
+        border-radius: 14px;
+        background: linear-gradient(145deg, rgb(var(--sh-overlay-hi) / 0.07), rgb(var(--sh-overlay-lo) / 0.015));
+        color: rgb(var(--sh-icon-fg));
+        transition:
+          color 0.15s ease,
+          border-color 0.15s ease,
+          transform 0.15s ease;
+      }
+
+      .icon-btn:hover {
+        border-color: rgb(var(--sh-primary) / 0.35);
+        color: rgb(var(--sh-primary));
+      }
+
+      /* Botão de tema: pílula que mostra o modo atual (auto/claro/escuro). */
+      .theme-btn {
+        display: grid;
+        width: 40px;
+        height: 40px;
+        flex: none;
+        place-items: center;
+        border: 1px solid rgb(var(--sh-hairline) / 0.13);
+        border-radius: 14px;
+        background: linear-gradient(145deg, rgb(var(--sh-overlay-hi) / 0.07), rgb(var(--sh-overlay-lo) / 0.015));
+        color: rgb(var(--sh-icon-fg));
+        transition:
+          color 0.15s ease,
+          border-color 0.15s ease,
+          transform 0.15s ease;
+      }
+
+      .theme-btn:hover {
+        border-color: rgb(var(--sh-primary) / 0.35);
+        color: rgb(var(--sh-primary));
+      }
+
+      .theme-btn:active {
+        transform: scale(0.97);
+      }
+
+      /* A barra de cômodos gruda no topo quando o header ("smart home") sai de
+         vista no scroll. O ::before pinta o fundo de ponta a ponta da tela,
+         mesmo com o padding horizontal do <main>. */
+      .room-bar {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        padding: 0.25rem 0;
+        isolation: isolate;
+      }
+
+      .room-bar::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 50%;
+        z-index: -1;
+        width: 100vw;
+        transform: translateX(-50%);
+        border-bottom: 1px solid rgb(var(--sh-hairline) / 0.07);
+        background: rgb(var(--sh-room-bar-bg) / 0.9);
+        -webkit-backdrop-filter: blur(18px) saturate(140%);
+        backdrop-filter: blur(18px) saturate(140%);
+      }
+
+      /* Botão "desligar tudo": só o ícone, compacto e alinhado à direita da
+         linha de cômodos. */
+      .all-off-btn {
+        display: grid;
+        width: 40px;
+        height: 40px;
+        flex: none;
+        place-items: center;
+        border: 1px solid rgb(var(--sh-error) / 0.4);
+        border-radius: 999px;
+        background: rgb(var(--sh-error) / 0.08);
+        color: rgb(var(--sh-error));
+        transition:
+          background-color 0.15s ease,
+          border-color 0.15s ease,
+          transform 0.15s ease;
+      }
+
+      .all-off-btn:hover {
+        border-color: rgb(var(--sh-error) / 0.65);
+        background: rgb(var(--sh-error) / 0.15);
+      }
+
+      /* ---------- controles do ventilador e da tomada ----------
+         Visual próprio do console de ações do ventilador (tiles 2x2), do
+         seletor de velocidade e do botão circular da tomada. Fica em CSS puro
+         para não depender de classes montadas dinamicamente no JS. */
+
+      .ctrl-console {
+        padding: 5px;
+        border: 1px solid rgb(var(--sh-hairline) / 0.1);
+        border-radius: 22px;
+        background: linear-gradient(160deg, rgb(var(--sh-surface-container-lowest) / 0.8), rgb(var(--sh-surface-container-low) / 0.9));
+        box-shadow:
+          inset 0 1px rgba(255, 255, 255, 0.04),
+          inset 0 -1px rgb(var(--sh-shadow) / 0.45);
+      }
+
+      .ctrl-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .ctrl-span-2 {
+        grid-column: 1 / -1;
+      }
+
+      .ctrl-tile {
+        --tile-accent: 170 185 181;
+        --tile-accent-soft: rgb(var(--sh-on-surface-variant) / 0.12);
+        --tile-accent-line: rgb(var(--sh-on-surface-variant) / 0.4);
+        --tile-accent-glow: rgb(var(--sh-on-surface-variant) / 0.22);
+
+        display: flex;
+        min-height: 62px;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 9px 6px;
+        border: 1px solid rgb(var(--sh-hairline) / 0.07);
+        border-radius: 16px;
+        background: linear-gradient(160deg, rgb(var(--sh-surface-container-high) / 0.85), rgb(var(--sh-surface-container-low) / 0.9));
+        color: rgb(var(--sh-on-surface-variant));
+        touch-action: manipulation;
+        transition:
+          transform 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+          color 0.2s ease,
+          border-color 0.2s ease,
+          background-color 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+
+      .ctrl-tile[data-tone="primary"] {
+        --tile-accent: rgb(var(--sh-primary));
+        --tile-accent-soft: rgb(var(--sh-primary) / 0.13);
+        --tile-accent-line: rgb(var(--sh-primary) / 0.45);
+        --tile-accent-glow: rgb(var(--sh-primary) / 0.3);
+      }
+
+      .ctrl-tile[data-tone="secondary"] {
+        --tile-accent: rgb(var(--sh-secondary));
+        --tile-accent-soft: rgb(var(--sh-secondary) / 0.13);
+        --tile-accent-line: rgb(var(--sh-secondary) / 0.45);
+        --tile-accent-glow: rgb(var(--sh-secondary) / 0.3);
+      }
+
+      .ctrl-tile[data-tone="tertiary"] {
+        --tile-accent: rgb(var(--sh-tertiary));
+        --tile-accent-soft: rgb(var(--sh-tertiary) / 0.13);
+        --tile-accent-line: rgb(var(--sh-tertiary) / 0.45);
+        --tile-accent-glow: rgb(var(--sh-tertiary) / 0.3);
+      }
+
+      .ctrl-tile[data-tone="error"] {
+        --tile-accent: rgb(var(--sh-error));
+        --tile-accent-soft: rgb(var(--sh-error) / 0.1);
+        --tile-accent-line: rgb(var(--sh-error) / 0.42);
+        --tile-accent-glow: rgb(var(--sh-error) / 0.26);
+      }
+
+      .ctrl-tile:hover {
+        border-color: rgb(var(--sh-hairline) / 0.16);
+        color: rgb(var(--sh-icon-hi));
+      }
+
+      .ctrl-tile:active {
+        transform: scale(0.96);
+      }
+
+      .ctrl-tile:focus-visible {
+        outline: 2px solid rgb(var(--sh-primary) / 0.5);
+        outline-offset: 2px;
+      }
+
+      /* Botão de estado ATIVO (Luz, Ventilar, Exaustar, LED, Sono, Eco, ...):
+         fundo liso na cor do tom, sem o degradê radial que dava o brilho no topo.
+         O botão de AÇÃO (data-armed, ex.: "Desligar") não tem estado próprio —
+         ele só muda o estado de outros elementos — então usa o visual neutro de
+         um tile comum, sem o realce vermelho. */
+      .ctrl-tile[data-active="true"] {
+        border-color: var(--tile-accent-line);
+        background: var(--tile-accent-soft);
+        color: var(--tile-accent);
+      }
+
+      .ctrl-tile-label {
+        max-width: 100%;
+        overflow: hidden;
+        font-size: 10px;
+        font-weight: 650;
+        line-height: 1.1;
+        letter-spacing: 0.1em;
+        text-overflow: ellipsis;
+        text-transform: uppercase;
+        white-space: nowrap;
+        opacity: 0.9;
+      }
+
+      .speed-track {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 5px;
+        padding: 7px;
+        border: 1px solid rgb(var(--sh-hairline) / 0.1);
+        border-radius: 18px;
+        background: linear-gradient(160deg, rgb(var(--sh-surface-container-lowest) / 0.85), rgb(var(--sh-surface-container-low) / 0.75));
+        box-shadow:
+          inset 0 1px rgba(255, 255, 255, 0.03),
+          inset 0 -2px 6px rgb(var(--sh-shadow) / 0.35);
+      }
+
+      .speed-seg {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        padding: 9px 2px;
+        border: 1px solid transparent;
+        border-radius: 13px;
+        background: transparent;
+        color: rgb(var(--sh-on-surface-variant));
+        touch-action: manipulation;
+        transition:
+          transform 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+          color 0.2s ease,
+          border-color 0.2s ease,
+          background-color 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+
+      .speed-seg:hover {
+        background: rgb(var(--sh-surface-container-highest) / 0.6);
+        color: rgb(var(--sh-icon-hi));
+      }
+
+      .speed-seg:active {
+        transform: scale(0.94);
+      }
+
+      .speed-seg:focus-visible {
+        outline: 2px solid rgb(var(--sh-primary) / 0.5);
+        outline-offset: 1px;
+      }
+
+      .speed-seg[data-active="true"] {
+        border-color: rgb(var(--sh-primary) / 0.6);
+        background: linear-gradient(180deg, rgb(var(--sh-accent-hi)), rgb(var(--sh-accent)) 45%, rgb(var(--sh-accent-lo)));
+        color: rgb(var(--sh-on-primary));
+      }
+
+      .speed-seg-num {
+        font-family: inherit;
+        font-size: 17px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .speed-seg-label {
+        max-width: 100%;
+        overflow: hidden;
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 1.05;
+        letter-spacing: 0;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        opacity: 0.78;
+      }
+
+      .speed-seg[data-active="true"] .speed-seg-label {
+        font-weight: 700;
+        opacity: 0.9;
+      }
+
+      .power-dial-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 4px 0 2px;
+      }
+
+      .power-dial-stage {
+        position: relative;
+        display: grid;
+        place-items: center;
+      }
+
+      .power-dial-aura {
+        position: absolute;
+        inset: -12px;
+        border-radius: 999px;
+        background: radial-gradient(circle, rgb(var(--sh-primary) / 0.35), transparent 68%);
+        filter: blur(14px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+      }
+
+      .power-dial-wrap[data-on="true"] .power-dial-aura {
+        opacity: 1;
+      }
+
+      .power-dial {
+        position: relative;
+        width: 96px;
+        height: 96px;
+        padding: 3px;
+        border: 1px solid rgb(var(--sh-hairline) / 0.16);
+        border-radius: 999px;
+        background: linear-gradient(180deg, rgb(var(--sh-surface-container-high)), rgb(var(--sh-surface-container)));
+        touch-action: manipulation;
+        transition:
+          transform 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+          box-shadow 0.25s ease;
+      }
+
+      .power-dial:active {
+        transform: scale(0.95);
+      }
+
+      .power-dial:focus-visible {
+        outline: 2px solid rgb(var(--sh-primary) / 0.55);
+        outline-offset: 4px;
+      }
+
+      .power-dial-ring {
+        display: grid;
+        width: 100%;
+        height: 100%;
+        place-items: center;
+        padding: 3px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, rgb(var(--sh-surface-container-low)), rgb(var(--sh-surface-container-lowest)));
+        transition:
+          background 0.25s ease,
+          box-shadow 0.25s ease;
+      }
+
+      .power-dial-core {
+        position: relative;
+        display: grid;
+        width: 100%;
+        height: 100%;
+        place-items: center;
+        overflow: hidden;
+        border: 0;
+        border-radius: 999px;
+        background: linear-gradient(180deg, rgb(var(--sh-surface-container-high)), rgb(var(--sh-surface-container-lowest)));
+        color: rgb(var(--sh-on-surface-variant));
+        transition:
+          background 0.25s ease,
+          border-color 0.25s ease,
+          box-shadow 0.25s ease,
+          color 0.25s ease;
+      }
+
+      .power-dial[data-on="true"] .power-dial-ring {
+        background: linear-gradient(180deg, rgb(var(--sh-accent-hi)), rgb(var(--sh-accent)) 45%, rgb(var(--sh-accent-lo)));
+      }
+
+      .power-dial[data-on="true"] .power-dial-core {
+        color: rgb(var(--sh-primary));
+      }
+
+      .power-dial-icon {
+        position: relative;
+        z-index: 1;
+        transition: filter 0.25s ease;
+      }
+
+      .power-dial-caption {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: rgb(var(--sh-on-surface-variant));
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        transition: color 0.25s ease;
+      }
+
+      .power-dial-dot {
+        width: 5px;
+        height: 5px;
+        flex: none;
+        border-radius: 999px;
+        background: currentcolor;
+      }
+
+      .power-dial-wrap[data-on="true"] .power-dial-caption {
+        color: rgb(var(--sh-primary));
+      }
+
+      .power-dial-wrap[data-on="true"] .power-dial-dot {
+        animation: dial-pulse 2s ease-in-out infinite;
+        box-shadow: 0 0 8px rgb(var(--sh-primary));
+      }
+
+      @keyframes dial-pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.45;
+        }
+      }
+
+      @media (max-width: 380px) {
+        .ctrl-tile {
+          min-height: 58px;
+          gap: 5px;
+          border-radius: 14px;
+        }
+
+        .ctrl-tile-label {
+          font-size: 9.5px;
+          letter-spacing: 0.08em;
+        }
+
+        .speed-track {
+          gap: 4px;
+          padding: 6px;
+        }
+
+        .speed-seg {
+          padding: 8px 1px;
+        }
+
+        .speed-seg-num {
+          font-size: 16px;
+        }
+
+        .speed-seg-label {
+          font-size: 9px;
+        }
+
+        .power-dial {
+          width: 88px;
+          height: 88px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .ctrl-tile,
+        .speed-seg,
+        .power-dial,
+        .power-dial-ring,
+        .power-dial-core,
+        .power-dial-aura {
+          transition: none;
+        }
+
+        .ctrl-tile[data-active="true"],
+        .speed-seg[data-active="true"] {
+          transform: none;
+        }
+
+        .power-dial-wrap[data-on="true"] .power-dial-dot {
+          animation: none;
+        }
+      }
+
+      /* ---------- bottom nav ---------- */
+
+      /* A barra ocupa toda a largura e vai até a borda inferior da tela, para
+         que nenhum device apareça por baixo dela. O conteúdo continua
+         centralizado (max-width) no inner. */
+      .bottom-nav {
+        position: fixed;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 40;
+        border-top: 1px solid rgb(var(--sh-hairline) / 0.13);
+        border-radius: 22px 22px 0 0;
+        background: rgb(var(--sh-nav-bg) / 0.88);
+        box-shadow:
+          0 -10px 35px rgb(var(--sh-shadow) / 0.25),
+          inset 0 1px rgba(255, 255, 255, 0.05);
+        pointer-events: none;
+        -webkit-backdrop-filter: blur(22px) saturate(140%);
+        backdrop-filter: blur(22px) saturate(140%);
+      }
+
+      .bottom-nav-inner {
+        display: grid;
+        max-width: 32rem;
+        margin: 0 auto;
+        padding: 8px 8px max(8px, env(safe-area-inset-bottom, 0px));
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        pointer-events: auto;
+      }
+
+      .nav-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        padding: 8px 4px;
+        border: 0;
+        border-radius: 15px;
+        background: transparent;
+        color: rgb(var(--sh-on-surface-variant));
+        font-size: 12px;
+        transition:
+          color 0.15s ease,
+          background-color 0.15s ease;
+      }
+
+      .nav-item.text-primary {
+        background: rgb(var(--sh-primary) / 0.11);
+      }
+      @keyframes fan-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .fan-rotor {
+        display: inline-flex;
+        animation: fan-spin linear infinite;
+      }
+      .fan-speed-0 {
+        animation-play-state: paused;
+      }
+      .fan-speed-1 {
+        animation-duration: 2.8s;
+      }
+      .fan-speed-2 {
+        animation-duration: 2.1s;
+      }
+      .fan-speed-3 {
+        animation-duration: 1.5s;
+      }
+      .fan-speed-4 {
+        animation-duration: 1s;
+      }
+      .fan-speed-5 {
+        animation-duration: 0.65s;
+      }
+      .fan-speed-6 {
+        animation-duration: 0.4s;
+      }
+      .fan-reverse {
+        animation-direction: reverse;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .fan-rotor {
+          animation: none;
+        }
+      }
+
+      @media (max-width: 380px) {
+        .modal-responsive {
+          width: calc(100vw - 1rem);
+          max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 1rem);
+        }
+
+        .logo-badge {
+          width: 40px;
+          height: 40px;
+          border-radius: 13px;
+        }
+
+        .brand-title {
+          font-size: 21px;
+        }
+
+        .brand-sub {
+          font-size: 13px;
+        }
+
+        .icon-btn,
+        .theme-btn {
+          width: 36px;
+          height: 36px;
+          border-radius: 12px;
+        }
+      }
+
+      @media (max-width: 340px) {
+        #refresh {
+          display: none;
+        }
+      }
+
+      /* Celular: cada frame de scroll fica caro com backdrop-filter, glows
+         desfocados e fundo fixo. Mantemos a mesma linguagem visual, mas com
+         superfícies mais opacas e sem blur — o ganho de fluidez é grande. */
+      @media (max-width: 767px) {
+        body.app-body {
+          background-attachment: scroll;
+        }
+
+        .glass-card,
+        .glass-panel,
+        .room-bar::before,
+        .bottom-nav,
+        #toast {
+          -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+        }
+
+        .glass-card {
+          background: linear-gradient(145deg, rgb(var(--sh-glass-card-hi) / 0.96), rgb(var(--sh-glass-card-lo) / 0.98) 65%);
+          box-shadow:
+            0 10px 22px rgb(var(--sh-shadow) / 0.22),
+            inset 0 1px rgba(255, 255, 255, 0.05);
+        }
+
+        .room-bar::before {
+          background: rgb(var(--sh-room-bar-bg) / 0.97);
+        }
+
+        .bottom-nav {
+          background: rgb(var(--sh-nav-bg) / 0.98);
+        }
+
+        .card-glow {
+          display: none;
+        }
+
+        .power-dial-aura {
+          filter: none;
+          background: radial-gradient(circle, rgb(var(--sh-primary) / 0.2), transparent 72%);
+        }
+      }
+
+      dialog::backdrop {
+        background: rgb(var(--sh-shadow) / 0.72);
+        backdrop-filter: blur(3px);
+      }

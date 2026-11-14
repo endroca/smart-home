@@ -1,0 +1,21 @@
+{
+  "http_addr": ":8080",
+  "db": "hub.db",
+  "tuya_access_id": "",
+  "tuya_access_secret": "",
+  "tuya_region": "us",
+  "tuya_auto_listen": true,
+  "tuya_refresh_seconds": 5,
+  "midea_username": "",
+  "midea_password": "",
+  "midea_cloud": "SmartHome",
+  "voice_llm_enabled": false,
+  "voice_llm_url": "",
+  "voice_llm_key": "",
+  "voice_llm_model": "",
+  "voice_stt_provider": "",
+  "voice_stt_url": "",
+  "voice_stt_key": "",
+  "voice_stt_model": "",
+  "voice_stt_language": "pt"
+}

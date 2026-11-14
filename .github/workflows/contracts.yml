@@ -1,0 +1,46 @@
+name: contracts
+
+on:
+  push:
+    paths:
+      - "contracts/**"
+      - "tools/**"
+      - ".github/workflows/contracts.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "tools/**"
+      - ".github/workflows/contracts.yml"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: json válido
+        run: |
+          set -euo pipefail
+          for f in contracts/*.json contracts/examples/*.json; do
+            jq empty "$f"
+          done
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: exemplos contra os schemas
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet check-jsonschema
+          check-jsonschema --schemafile contracts/manifest.schema.json contracts/examples/manifest.example.json
+          check-jsonschema --schemafile contracts/status.schema.json contracts/examples/status.example.json
+          check-jsonschema --schemafile contracts/fan-state.schema.json contracts/examples/fan-state.example.json
+
+      - name: shell syntax
+        run: |
+          set -euo pipefail
+          for f in tools/*.sh; do
+            bash -n "$f"
+          done

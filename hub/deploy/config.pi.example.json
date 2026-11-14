@@ -1,0 +1,12 @@
+{
+  "http_addr": ":80",
+  "db": "/var/lib/smart-home-hub/hub.db",
+  "tuya_access_id": "",
+  "tuya_access_secret": "",
+  "tuya_region": "us",
+  "tuya_auto_listen": true,
+  "tuya_refresh_seconds": 5,
+  "midea_username": "",
+  "midea_password": "",
+  "midea_cloud": "SmartHome"
+}

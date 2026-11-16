@@ -117,6 +117,8 @@ export interface DeviceRow {
   template?: string;
   category?: string;
   cloud_only?: boolean;
+  /** Ordem de exibicao dentro do comodo (menor primeiro). */
+  sort?: number;
   has_token?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -253,6 +255,9 @@ export interface AutomationSource {
   fire_at?: string;
   /** Gatilho semanal: dispara em `at` nos dias escolhidos (0=Dom..6=Sáb). */
   days?: number[];
+  /** Só dispara quando o usuário inicia: ignora mudanças causadas por outra
+   *  automação. Sem efeito em gatilhos manual/horário. */
+  only_user?: boolean;
 }
 
 export interface AutomationAction {
@@ -320,7 +325,38 @@ export interface HubDevice {
   room: string;
   online: boolean;
   template: string;
+  /** Ordem de exibicao dentro do comodo (menor primeiro). */
+  sort?: number;
   /** Categoria Tuya (ex.: "jtmspro" numa fechadura); usada pela inferência. */
   category?: string;
   [k: string]: unknown;
+}
+
+/* ---------- funcoes do device ---------- */
+
+// DeviceFunction e uma funcao configuravel do device: o rotulo que a voz
+// reconhece e, quando marcada, o que "desligar tudo" envia.
+export interface DeviceFunction {
+  key: string;
+  label: string;
+  aliases?: string[];
+  voice: boolean;
+  off: boolean;
+  off_value?: unknown;
+  driver: string;
+  kind: "bool" | "enum" | "number" | "text";
+  values?: string[];
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
+}
+
+// FunctionCatalog e o catalogo efetivo de um device: derivado das capacidades
+// ou o que o operador salvou (configured=true).
+export interface FunctionCatalog {
+  device_id: string;
+  driver: string;
+  configured: boolean;
+  functions: DeviceFunction[];
 }

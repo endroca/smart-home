@@ -555,6 +555,20 @@
             {/if}
           {/if}
         {/if}
+
+        <div class="flex items-center justify-between rounded-xl bg-surface-container-low px-3 py-2.5">
+          <div>
+            <div class="font-body-md text-body-md text-on-surface">Só quando o usuário inicia</div>
+            <div class="font-label-sm text-label-sm text-on-surface-variant">
+              Ignora mudanças causadas por outra automação — evita laços entre automações.
+            </div>
+          </div>
+          <Toggle
+            on={draft.onlyUser}
+            label="Só quando o usuário inicia"
+            onclick={() => (draft.onlyUser = !draft.onlyUser)}
+          />
+        </div>
       {:else}
         <p class="font-label-sm text-label-sm text-on-surface-variant">
           Escolha um dispositivo da lista. Todos os dispositivos aparecem juntos.

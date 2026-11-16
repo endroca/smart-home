@@ -19,7 +19,7 @@ export interface FakeApi {
   calls: RecordedCall[];
 }
 
-export function makeFakeApi(): FakeApi {
+export function makeFakeApi(responses: Record<string, unknown> = {}): FakeApi {
   const calls: RecordedCall[] = [];
   const handler: ProxyHandler<Record<string, unknown>> = {
     get(_target, prop: string) {
@@ -28,6 +28,9 @@ export function makeFakeApi(): FakeApi {
       if (prop === "enc") return (v: string) => encodeURIComponent(v);
       return (...args: unknown[]) => {
         calls.push({ method: prop, args });
+        if (Object.prototype.hasOwnProperty.call(responses, prop)) {
+          return Promise.resolve(responses[prop]);
+        }
         return Promise.resolve({});
       };
     },

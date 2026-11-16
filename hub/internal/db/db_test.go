@@ -433,3 +433,117 @@ func TestFanRegistration(t *testing.T) {
 		t.Fatalf("fans not removed with the gateway: %+v", fans)
 	}
 }
+
+// TestMigrateV18AddsColumns checks the v18 migration adds the order and function
+// columns with safe defaults on an existing registry.
+func TestMigrateV18AddsColumns(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+
+	if err := s.UpsertDevice(ctx, Device{ID: "tv", Kind: KindTuya, Name: "TV", RoomID: "sala"}); err != nil {
+		t.Fatal(err)
+	}
+	// openTemp already applied every migration, so calling it again is a no-op
+	// that must not fail on the existing columns.
+	if err := s.migrateV18(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.GetDevice(ctx, "tv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Sort != 0 || d.FunctionsJSON != "" {
+		t.Fatalf("new columns should default to zero/empty: sort=%d functions=%q", d.Sort, d.FunctionsJSON)
+	}
+
+	// The functions column round-trips through the setter.
+	if err := s.SetDeviceFunctions(ctx, "tv", `[{"key":"1","label":"Luz","off":true,"off_value":false}]`); err != nil {
+		t.Fatal(err)
+	}
+	d, _ = s.GetDevice(ctx, "tv")
+	if d.FunctionsJSON == "" {
+		t.Fatal("functions_json was not stored")
+	}
+}
+
+// TestSetDeviceOrderRejectsMixedRooms checks the order write is atomic and only
+// accepts devices of one room.
+func TestSetDeviceOrderRejectsMixedRooms(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+
+	for _, d := range []Device{
+		{ID: "a", Kind: KindTuya, RoomID: "sala"},
+		{ID: "b", Kind: KindTuya, RoomID: "sala"},
+		{ID: "c", Kind: KindTuya, RoomID: "quarto"},
+	} {
+		if err := s.UpsertDevice(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := s.SetDeviceOrder(ctx, []string{"b", "a"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.GetDevice(ctx, "b")
+	a, _ := s.GetDevice(ctx, "a")
+	if b.Sort != 0 || a.Sort != 1 {
+		t.Fatalf("order not applied: a=%d b=%d", a.Sort, b.Sort)
+	}
+
+	if err := s.SetDeviceOrder(ctx, []string{"a", "c"}); err == nil {
+		t.Fatal("mixed rooms should be rejected")
+	}
+	// The rejection must not have written anything.
+	a2, _ := s.GetDevice(ctx, "a")
+	if a2.Sort != 1 {
+		t.Fatalf("failed order changed a: sort=%d", a2.Sort)
+	}
+
+	if err := s.SetDeviceOrder(ctx, []string{"a", "a"}); err == nil {
+		t.Fatal("duplicate ids should be rejected")
+	}
+	if err := s.SetDeviceOrder(ctx, []string{"ghost"}); err == nil {
+		t.Fatal("unknown device should be rejected")
+	}
+	if err := s.SetDeviceOrder(ctx, nil); err == nil {
+		t.Fatal("empty order should be rejected")
+	}
+}
+
+// TestSetDeviceRoomAppendsToEnd checks moving a device to a room puts it last
+// and that re-setting the same room is a no-op.
+func TestSetDeviceRoomAppendsToEnd(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+
+	for _, d := range []Device{
+		{ID: "a", Kind: KindTuya, RoomID: "sala"},
+		{ID: "b", Kind: KindTuya, RoomID: "sala"},
+		{ID: "c", Kind: KindTuya, RoomID: "quarto"},
+	} {
+		if err := s.UpsertDevice(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetDeviceOrder(ctx, []string{"a", "b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetDeviceRoom(ctx, "c", "sala"); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := s.GetDevice(ctx, "c")
+	if c.RoomID != "sala" || c.Sort != 2 {
+		t.Fatalf("moved device should land at the end: room=%q sort=%d", c.RoomID, c.Sort)
+	}
+
+	// Re-assigning the same room must not shuffle it.
+	if err := s.SetDeviceRoom(ctx, "c", "sala"); err != nil {
+		t.Fatal(err)
+	}
+	c2, _ := s.GetDevice(ctx, "c")
+	if c2.Sort != 2 {
+		t.Fatalf("re-setting the same room changed the order: sort=%d", c2.Sort)
+	}
+}

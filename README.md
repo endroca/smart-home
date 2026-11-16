@@ -501,7 +501,10 @@ O nibble baixo do byte 3 (SS) é uma função do nibble alto (estado) e do byte 
 lowNibble = highNibble ^ ((B2 & 0x0F) ^ 0x07)
 ```
 
-Na recepção, um frame com checksum inválido é descartado (`rxChecksumFail++`).
+Na recepção o checksum é usado apenas como **diagnóstico** (`rxChecksumFail++`);
+ele **não descarta** o frame. A identificação do comando usa só as 3 primeiras
+partes (B0/B1/B2), porque a 4a (B3) é o contador/rolling code e muda a cada
+pressão (ver 7.5).
 
 ### 7.5 Recepção (RX) — captura por interrupção
 
@@ -519,11 +522,12 @@ O pino `GDO0` do CC1101 gera interrupção a cada mudança de nível. O handler
 2. Acha o início dos dados (primeira transição longa > 3000 µs) e decodifica em
    pares: `(p1<450 && p2≥450) → bit 0`, `(p1≥450 && p2<450) → bit 1`.
 3. Monta 4 bytes. Se não fechou exatamente 4 bytes, descarta.
-4. Valida o checksum.
-5. Identifica **fan + comando** procurando um frame aprendido em que B0/B1/B2
-   batem. O contador é usado para desempatar: só um "candidato forte" (contador
-   consistente) atualiza o estado; com 0 ou >1 candidatos, o frame é ignorado
-   (evita atualizar o ventilador errado quando dois compartilham o frame).
+4. Mede o checksum só como diagnóstico (`rxChecksumFail`), sem descartar.
+5. Identifica **fan + comando** procurando um frame aprendido em que **B0/B1/B2**
+   batem. A 4a parte (B3, contador/rolling code) é **ignorada**: ela muda a cada
+   pressão e não identifica o comando — era o que impedia a detecção quando o
+   rolling code do controle divergia do nosso. Se o mesmo frame casar com
+   ventiladores diferentes, o frame é ignorado em vez de atualizar o alvo errado.
 6. Aplica **debounce** (`RF_RX_DEBOUNCE_MS = 500`) para rejeitar frames repetidos.
 7. Atualiza o estado e enfileira o push (`state_onRfCommand`).
 
@@ -645,12 +649,12 @@ O hub guarda no SQLite tudo que não é descoberto automaticamente:
 
 ## 9. Banco de dados SQLite
 
-Fonte de verdade do hub, versionado por `PRAGMA user_version` (atual **17**) e
+Fonte de verdade do hub, versionado por `PRAGMA user_version` (atual **18**) e
 migrado na abertura. Tabelas:
 
 | Tabela | Conteúdo |
 |---|---|
-| `devices` | devices unificados (`kind`: `thing`/`fan`/`tuya`/`midea`), `ip`/`port`, `local_key`, `token`, `url`, `room_id`, `template`, `category`, `cloud_only`, `firmware_name`, `device22`, `key_source`… |
+| `devices` | devices unificados (`kind`: `thing`/`fan`/`tuya`/`midea`), `ip`/`port`, `local_key`, `token`, `url`, `room_id`, `sort` (ordem no cômodo), `template`, `category`, `cloud_only`, `functions_json` (rótulos/funções), `firmware_name`, `device22`, `key_source`… |
 | `rooms` | cômodos (`id`, `name`, `icon`, `sort`) |
 | `placements` | associação legada `kind/owner/device → room_id` |
 | `automations` | `id`, `name`, `enabled`, `once`, `source` (JSON), `schedule` (JSON), `delay` (JSON), `actions` (JSON) |
@@ -664,7 +668,8 @@ migrado na abertura. Tabelas:
 
 Migrações relevantes: v7 (nome/descrição do DP Tuya), v12 (`firmware_name`), v13
 (`category`/`cloud_only`), v14 (cursor de report-log), v15 (janela de horário da
-automação), v16 (`delay`), v17 (`once`/volátil).
+automação), v16 (`delay`), v17 (`once`/volátil), v18 (`sort` por cômodo e
+`functions_json`).
 
 O banco é **estado, não artefato**: `make seed-db` roda separado e é opt-in (usa
 `VACUUM INTO` para um snapshot consistente). Depois do primeiro seed, a Pi é a
@@ -941,6 +946,29 @@ o mesmo evento:
 O modo é **por device** e vale para qualquer Tuya: no detalhe do dispositivo há
 **"Ler pela nuvem"** (liga/desliga).
 
+O toggle tem **efeito imediato** (`Service.SetCloudOnly`): ligar **para o listener
+LAN** do device e **semeia o cursor em "agora"**, de modo que a nuvem assume na
+hora e **nunca reencena** as pressões recentes que a LAN já entregou (sem duplo
+disparo). Desligar religa o listener LAN. Sem credenciais de nuvem o toggle é
+recusado (o device ficaria sem fonte de eventos nenhuma).
+
+### 11.12 Log de eventos e reconexão
+
+O detalhe do dispositivo mostra um **log dos eventos recentes** por device
+(`/api/tuya/events` → `recent`, anel de 40 entradas). Isso responde "a pressão
+chegou?" sem depender do valor atual — o último valor só muda quando o DP muda,
+então sozinho esconde reconexões e perdas.
+
+- `kind: "dp"` — mudança recebida pela LAN.
+- `kind: "status"` — snapshot do início de uma sessão do listener, ou seja
+  **(re)conexão**. É o marcador de que o link caiu e voltou.
+- `kind: "report"` — relato vindo da nuvem (device `cloud_only`).
+
+**Reconciliação na reconexão**: o **primeiro** snapshot de um device apenas semeia
+o estado conhecido (boot não reencena automação); todo snapshot **posterior** é
+tratado como reconexão e dispara as automações cujo DP mudou durante a queda. Sem
+isso, uma pressão dada enquanto o link estava fora era engolida pelo snapshot.
+
 ---
 
 ## 12. Protocolo Midea
@@ -1133,9 +1161,10 @@ aberturas com a mesma digital contam como duas. `dp` usa o **id** do data point
 | `midea` | `device`, `state` |
 
 O ventilador RF **não tem** "ligar": ligar é escolher velocidade (`speed` 1..6);
-desligar é `speed: 0` ou `power: false`. Cada ação envia **um único campo** e o
-dispatcher **serializa** ações de ventilador com ~600 ms entre frames (o
-transmissor não aceita dois frames ao mesmo tempo).
+desligar é `speed: 0` ou `power: false`. Cada ação envia **um único campo**. As
+ações de uma regra começam em paralelo; use `delay` (§13.5) para espaçar frames
+RF. O **"Desligar tudo"** (§15), que não passa pelo dispatcher, espaça os
+ventiladores em ~600 ms por conta própria.
 
 ### 13.3 Janela de horário
 
@@ -1178,6 +1207,34 @@ modo que um restart **não reexecuta** regras.
 
 `delay` (opcional) pausa entre ações (até 60 s), usado sobretudo entre frames RF.
 
+### 13.6 Anti-loop ("só quando o usuário inicia")
+
+Uma automação pode causar o **evento** de outra (o interruptor liga a luz do
+ventilador, a luz do ventilador liga o interruptor) — um ciclo que se
+realimentaria para sempre. Três camadas resolvem isso **no dispatcher** (o
+firmware não distingue um toque na UI de uma ação de automação):
+
+- **`source.only_user: true`** ("Só quando o usuário inicia"): a regra **ignora
+  mudanças causadas por outra automação** e só dispara no que o usuário iniciou.
+  É o padrão das automações novas; desligue para permitir encadeamento.
+- **Mapa de eco**: ao executar uma ação, o dispatcher anota o estado que ela deve
+  produzir (`(device, chave, valor)` com TTL curto). Quando o evento chega com
+  esse valor, ele é marcado como **origem = automação** e o eco é consumido; um
+  valor diferente descarta o eco (mudança do usuário). Uma regra **nunca**
+  re-dispara por seu próprio efeito.
+- **Limite de profundidade** (~8 saltos): um encadeamento mais longo é cortado e
+  registrado como loop, cobrindo ciclos mesmo com a flag desligada.
+
+Uma **correção de estado** (`POST /api/correct`, o "segurar" da UI) **nunca**
+dispara automação: ela é o operador dizendo qual é o estado real, não algo que o
+aparelho fez. Sem isso, "alinhar o que o hub acha" comandaria os aparelhos que a
+correção estava justamente tentando descrever (por exemplo, corrigir a luz do
+ventilador desligaria o interruptor pela regra de volta). O valor corrigido é
+lembrado, então a próxima mudança real é medida contra ele.
+
+No editor, o gatilho de dispositivo tem o interruptor **"Só quando o usuário
+inicia"**.
+
 ---
 
 ## 14. Voz
@@ -1192,6 +1249,23 @@ O parser é **local e pt-BR**: entende verbos (liga/desliga/acende/apaga), alvos
 (ventilador/luz/tomada/ar), cômodos, velocidade (`velocidade 3`) e cenas (qualquer
 automação manual, pelo nome). A execução reusa os mesmos caminhos do hub
 (`SetState`, controle Tuya/Midea e `dispatcher.Run`).
+
+Antes das regras por tipo, a frase é casada contra os **rótulos das funções**
+configuradas em cada device (§15). A frase costuma compor **ação + label +
+cômodo (+ propriedade)**, e a resolução segue essa ordem:
+
+- o **cômodo** citado restringe os devices ("... da sala");
+- o **rótulo/apelido** mais específico da função vence ("*luz*", "velocidade");
+- a **propriedade** vira o valor: velocidade/temperatura pelo próprio parser
+  ("velocidade 3", "ar em 22 graus") ou um número na frase.
+
+Assim "ligar luz da sala" = ligar (ação) + luz (label) + sala (cômodo) e
+"ligar ventilador da sala velocidade 1" = ligar (ação) + ventilador (tipo) +
+sala (cômodo) + velocidade (label) + 1 (valor). O **nome do device não é
+necessário**: o casamento é por cômodo + label (e, se dois devices do mesmo
+cômodo tiverem a mesma label, os candidatos são oferecidos). Os nomes
+padronizados (luz, ventilador, tomada, ar) seguem pelas regras por tipo quando
+não há label configurada.
 
 Como o alvo é escolhido:
 
@@ -1231,24 +1305,36 @@ compilar o binário.
   o registry + o kit de componentes. Cada layout registra
   `{ id, label, kinds, hint, match(device), component, config }`.
 - Pastas por tipo: `devices/fan` (`fan.ventisol`), `devices/tuya` (lógica/DPs
-  compartilhados), `devices/socket` (`tuya.socket`), `devices/switch`
-  (`tuya.switch`), `devices/lock` (`tuya.lock`), `devices/midea` (`midea.ac`) e
-  `devices/generic` (`generic`). Em cada uma, `logic.ts` é **puro** (testável sem
-  DOM), `actions.ts` faz os efeitos e os `.svelte` apresentam.
+  compartilhados), `devices/socket` (`tuya.socket`), `devices/gang` (`tuya.gang`,
+  interruptores multi-tecla), `devices/switch` (`tuya.switch`), `devices/lock`
+  (`tuya.lock`), `devices/midea` (`midea.ac`) e `devices/generic` (`generic`). Em
+  cada uma, `logic.ts` é **puro** (testável sem DOM), `actions.ts` faz os efeitos e
+  os `.svelte` apresentam.
 - **Inferência**: o primeiro `match` que aceita o device vence (ventilador →
   `fan.ventisol`; Tuya com telemetria → `tuya.socket`; fechadura → `tuya.lock`;
-  Tuya com specs → `tuya.switch`; Midea → `midea.ac`; resto → `generic`). O layout
-  fica na coluna `template` de `devices`.
+  Tuya com 2+ teclas `switch_N` → `tuya.gang`; Tuya com specs → `tuya.switch`;
+  Midea → `midea.ac`; resto → `generic`). O layout fica na coluna `template` de
+  `devices`.
+- **Ícones**: catálogo inline em `web/app/src/lib/ui/icons.ts`, **só contorno**
+  (stroke), renderizado pelo `Icon.svelte`. Não misturar glifos preenchidos com
+  vazados; `icons.test.ts` barra a regressão.
 - **Tema**: cores em `theme.css` como variáveis CSS (`R G B`) expostas pelo
   `@theme` do Tailwind v4 (`rgb(var(--sh-token))`), então `bg-surface` resolve
   para claro/escuro. O tema (claro/escuro/sistema) é escolhido na UI e aplicado por
   `.dark`/`.light` no `<html>`.
 - **Navegação**: menu inferior **Início, Cômodos, Automações, Ajustes**; o cômodo
   selecionado é lembrado no `localStorage`.
+- **Ordenar cômodo**: com um cômodo ativo, o botão **Ordenar** abre as setas ↑/↓
+  em cada card; a ordem é salva por cômodo (`POST /api/devices/order`) e vale para
+  todos os clientes. Na aba **Todos** a ordem segue a lista natural (tipo e nome).
 - **"Desligar tudo"** age no escopo da aba ativa (Todos = casa inteira; cômodo =
-  só ele): ventiladores recebem motor + luz desligados e Tuya tem saídas booleanas
-  (`switch*`, `power`, `relay`) desligadas. Os comandos saem **um device por vez**
-  (~600 ms entre ventiladores).
+  só ele) e chama **`POST /api/off`**: o hub olha, para cada device, quais funções
+  estão marcadas como **"Desligar"** e envia exatamente essas ações (ventiladores
+  espaçados ~600 ms), sem o front programar o que é "desligar".
+- **Funções do device**: no detalhe de qualquer device, a seção **Funções e voz**
+  permite ajustar **rótulo**, **apelidos**, **usar na voz** e **desligar** (com o
+  valor enviado). Os padrões são derivados das capacidades (manifesto do
+  ventilador, specs Tuya/Midea) e podem ser restaurados.
 - **Toque = RF** (`force: true`) e **segurar ~0,5 s = corrigir sem RF**; o card do
   ventilador tem "Desligar tudo" e "Luz". **Aprender**/**Renomear** abrem modais.
 - **Ajustes** tem três seções: **Dispositivos** (inventário por origem — Gateways
@@ -1328,11 +1414,14 @@ por necessidade do device na LAN.
 | POST | `/api/things/{thing}/events` | ingest do gateway (`state`/`status`/`event`); token do device |
 | GET/POST | `/api/firmware` · DELETE `/api/firmware/{name}` · POST `/api/things/{thing}/ota` | OTA |
 | GET/POST | `/api/devices` · GET/POST/DELETE `/api/devices/{id}` | devices (`kind`, `template`, `cloud_only`) |
+| POST | `/api/devices/order` | `{ids:[…]}`: ordem dos devices dentro do cômodo |
+| GET/PUT | `/api/devices/{id}/functions` | rótulos/funções do device (voz e "desligar tudo"; `{}` restaura os padrões) |
+| POST | `/api/off` | `{ids:[…]}`: desliga cada device pelas funções marcadas "off" |
 | GET/POST | `/api/rooms` · `/api/rooms/{id}` | cômodos |
 | GET/POST | `/api/placements` | ventilador → cômodo |
 | GET/POST | `/api/automations` · `/api/automations/{id}` · POST `…/{id}/run` | automações |
 | POST | `/api/voice/command` | voz |
-| vários | `/api/tuya/*` | scan, cloud, register, control, state, specs, energy, records, devices |
+| vários | `/api/tuya/*` | scan, cloud, register, control, state, specs, energy, records, events, devices |
 | vários | `/api/midea/*` | devices, scan, register, forget, specs, control, state, energy |
 
 ### 18.1 API do device (ESP32)

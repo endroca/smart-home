@@ -25,7 +25,8 @@ internal/httpapi/            API JSON + assets embutidos
 internal/tuya/               cliente do protocolo local Tuya (55AA/6699) e nuvem
 internal/tuya/service/       adaptador que serve a UI (scan/registro/listen/controle)
 internal/dispatch/           automações (evento → ação lógica) desacopladas do transporte
-internal/voice/              comandos de voz (parser pt-BR + fallback LLM) → SetState/Tuya/dispatch
+internal/functions/          catálogo de funções por device (rótulos da voz + ações de "desligar tudo")
+internal/voice/              comandos de voz (parser pt-BR + rótulos + fallback LLM) → SetState/Tuya/dispatch
 web/app/                     front novo em Svelte 5 + TS + Vite + Tailwind v4
                              (src/lib com stores, ui, devices/ e pages; vite-plugin-pwa)
 web/dist/                    build do front (gerado, fora do git) embutido no binário Go
@@ -343,13 +344,29 @@ O hub guarda tudo que não é descoberto automaticamente no SQLite:
   produto) e specs e estado. `cloud_only` marca os que dormem e são lidos pela
   nuvem (fechaduras).
 - **Cômodos**: tabela `rooms`. Cada fan (sub-device), cada gateway e cada device
-  Tuya tem um `room_id`. A UI agrupa os cards por cômodo.
+  Tuya tem um `room_id`. A UI agrupa os cards por cômodo. A **ordem** dos devices
+  dentro do cômodo fica em `devices.sort` (botão **Ordenar** no Início;
+  `POST /api/devices/order`).
+- **Funções do device**: `devices.functions_json` guarda os rótulos/apelidos que a
+  **voz** reconhece e quais funções contam como **"desligar"** (com o valor
+  enviado). Vazio = padrões derivados das capacidades; a UI edita em
+  **detalhe do device → Funções e voz** (`/api/devices/{id}/functions`).
+  Só as **saídas** viram funções: num interruptor multi-tecla, cada tecla
+  `switch_N`; o backlight, a pulsação, a trava e os `countdown_*` configuram o
+  aparelho e ficam de fora — inclusive do "desligar tudo".
+  O **rótulo cadastrado** é a fonte única do nome da tecla: o card do
+  dispositivo mostra o mesmo rótulo que a voz reconhece (renomear em
+  **Funções e voz** muda o card), e o front não mantém um segundo dicionário.
 - **Automações**: uma fonte (um evento de device Tuya/Midea, um disparo manual ou
   um **horário** — as voláteis, que disparam uma vez e somem) ligada a ações
   lógicas, com um período de horário opcional. **Não** está
   amarrada a um transporte: uma ação aponta para um ventilador
   (`thing`+`device_id`+estado) ou para um device Tuya/Midea (`device`+`dp`/`state`+valor);
-  quem decide o transporte é o hub.
+  quem decide o transporte é o hub. Para evitar **loops** (o interruptor liga a
+  luz, a luz liga o interruptor), a fonte aceita **`only_user: true`** — a regra
+  ignora mudanças causadas por outra automação — e o dispatcher ainda usa um
+  **mapa de eco** (a regra não re-dispara pelo próprio efeito) e um **limite de
+  profundidade** como rede de segurança.
 
 Quando o firmware reindexa os slots (`fan.remove`), o hub remapeia o ventilador
 — e o cômodo — pelo **id do sub-device** (estável) primeiro; o nome só é usado para
@@ -380,15 +397,19 @@ automaticamente).
   `{ id, label, kinds, hint, match(device), component, config }`.
 - Cada tipo de device tem sua pasta, dona do **layout + do comportamento**:
   `devices/fan` (ventilador), `devices/tuya` (lógica/DPs compartilhados),
-  `devices/socket` (`tuya.socket`), `devices/switch` (`tuya.switch`),
+  `devices/socket` (`tuya.socket`), `devices/gang` (`tuya.gang`, interruptor
+  multi-tecla), `devices/switch` (`tuya.switch`),
   `devices/lock` (`tuya.lock`, fechaduras), `devices/midea` (`midea.ac`) e
   `devices/generic` (`generic`). Em cada uma,
   `logic.ts` é **puro** (testável sem DOM), `actions.ts` faz os efeitos e
   `Device.svelte`/`config/Config.svelte` apresentam.
 - **Inferência**: o primeiro `match` que aceita o device vence — ventilador →
   `fan.ventisol`; Tuya com telemetria → `tuya.socket`; fechadura Tuya (pela
-  categoria) → `tuya.lock`; Tuya com specs → `tuya.switch`; Midea → `midea.ac`;
-  o resto → `generic`.
+  categoria) → `tuya.lock`; Tuya com duas ou mais teclas `switch_N` → `tuya.gang`;
+  Tuya com specs → `tuya.switch`; Midea → `midea.ac`; o resto → `generic`.
+- **Ícones**: catálogo inline em `web/app/src/lib/ui/icons.ts`, todo em
+  **contorno** (stroke) e renderizado pelo `Icon.svelte`; o `icons.test.ts` barra
+  a volta de glifos preenchidos, que quebravam a coerência entre os cards.
 - Para criar um novo design: crie `web/app/src/lib/devices/<nome>/` com o
   componente + as ações e chame `registerDevice({...})` em `index.ts` (o
   `devices/index.ts` importa todos). Cada layout tem `logic.test.ts` (puro) e
@@ -407,6 +428,17 @@ ficam os controles avançados (data points Tuya, brilho, modo, ...), as **açõe
 **informações de conexão** (IP, cômodo, fonte/último evento). O card fica só com
 o essencial (ligar/desligar, telemetria e controles primários), sem poluir o
 visual.
+
+Os campos da configuração **não sofrem re-render por atualização alheia**. O
+estado do hub é **reconciliado**, não substituído: o `load()` (30 s) alinha os
+objetos existentes gravando só o que mudou, e um evento de DP grava **apenas
+aquele DP** (`reconcile.ts`). Assim uma atualização de outro dispositivo — ou de
+outro data point — não invalida a árvore de componentes, e o input que o
+operador está editando não é tocado. Um `Enum` cujo valor reportado não está no
+range declarado pela nuvem (ex.: `relay_status` = `off` num aparelho que declara
+`power_off`/`power_on`/`last`) mostra esse valor como opção em vez de ficar em
+branco, e quando o aparelho ignora a escrita o operador recebe um aviso — em vez
+de a tela mentir sobre o aparelho.
 
 A navegação é por um menu inferior (**Início, Cômodos, Automações, Ajustes**),
 que troca de página sem modal; o cômodo selecionado é lembrado no
@@ -581,6 +613,17 @@ O device Tuya já empurra os DPs pela conexão TCP local; o ESP32 empurra pelo
 o push do device. O SSE só leva isso até o navegador. Um `load()` de reconciliação
 lento (30 s) continua como rede de segurança.
 
+O hub **só publica quando algum DP mudou**: os aparelhos reenviam o conjunto
+completo a cada poucos segundos e reemitir o mesmo snapshot só faria a UI se
+redesenhar à toa (e apagaria edições em curso na tela de configuração). Um
+relatório parcial (só o DP que mudou) continua sendo publicado normalmente.
+
+Do lado da UI, o estado é **reconciliado** (`web/app/src/lib/stores/reconcile.ts`):
+o snapshot do `load()` alinha os objetos que já existem gravando só o que mudou,
+e um evento de DP grava apenas aquele DP. Trocar os objetos por versões novas
+(mesmo idênticas) invalidaria toda a árvore de componentes — inclusive um campo
+de configuração sem relação com a atualização.
+
 ## Midea SmartHome
 
 A integração aceita aparelhos de ar-condicionado Midea V3 encontrados na LAN. A aba **Midea** descobre os aparelhos, e o cadastro usa as credenciais `midea_username`/`midea_password` para obter token e chave individuais no SmartHome. O hub testa essa credencial diretamente no aparelho e grava os dados no SQLite. Depois do cadastro, leitura e comandos são enviados pela LAN; a conta não é consultada para controlar o aparelho. O hub redescobre o aparelho pelo ID Midea e atualiza o IP salvo quando ele muda.
@@ -635,6 +678,18 @@ No modo nuvem a leitura e o comando vão **à nuvem primeiro** — e, se a nuvem
 **não responder**, o hub **cai para a LAN** (quando o device tem `local_key` e
 endereço), então uma queda de internet não deixa um device preso. O flag é gravado
 em `devices.cloud_only` e a `category` em `devices.category`.
+
+#### Interruptores multi-tecla
+
+Um interruptor de parede com duas ou mais teclas (categoria `kg` e afins) expõe
+uma saída por tecla (`switch_1`, `switch_2`, ...). Quando há **duas ou mais**, a
+inferência escolhe o layout **`tuya.gang`**: uma placa com uma tecla por saída,
+o estado de cada uma e os atalhos **Ligar todas** / **Desligar todas** (só as
+teclas). Cada tecla mostra o **rótulo cadastrado** em **Funções e voz** (sem
+rótulo cadastrado, cai no nome da spec / dicionário curado). Os DPs que
+configuram o aparelho — backlight, pulsação, trava, relé e os `countdown_*` —
+não entram na placa nem no "desligar tudo"; ficam em **Ajustes do interruptor**,
+na engrenagem do card.
 
 O modo é **por device** e vale para qualquer Tuya, não só fechaduras: no detalhe
 do dispositivo (engrenagem) há o controle **"Ler pela nuvem"** — ligado, o hub lê e
@@ -838,6 +893,9 @@ conhecido (rollback simples, uma tentativa).
 | GET | `/firmware/{file}.bin` | binário para o ESP32 |
 | GET/POST | `/api/devices` | lista/cadastra devices (`kind`: `thing`/`tuya`/`midea`, `template` opcional) |
 | GET/POST/DELETE | `/api/devices/{id}` | token/URL/cômodo/**layout** (`template`) e `cloud_only` de um device |
+| POST | `/api/devices/order` | `{ids:[…]}`: grava a ordem dos devices dentro de um cômodo (atômico, só um cômodo) |
+| GET/PUT | `/api/devices/{id}/functions` | rótulos/funções do device: `{functions:[{key,label,aliases,voice,off,off_value}]}`; `GET` devolve o catálogo derivado; `PUT` com `{}` restaura os padrões |
+| POST | `/api/off` | `{ids:[…]}`: desliga cada device pelas funções marcadas `off` (ventiladores espaçados ~600 ms); devolve `results` por device |
 | GET/POST | `/api/rooms` | lista/cria cômodos |
 | GET/POST/DELETE | `/api/rooms/{id}` | um cômodo |
 | GET/POST | `/api/placements` | ventilador → cômodo |

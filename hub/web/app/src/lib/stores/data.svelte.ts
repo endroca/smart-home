@@ -3,11 +3,13 @@
 // nenhum deles reconstroi a tela a mao.
 
 import { api } from "$lib/api";
+import { reconcileField, reconcileList, reconcileObject } from "$lib/stores/reconcile";
 import { toast } from "$lib/stores/toast.svelte";
 import type {
   Automation,
   DeviceRow,
   FirmwareInfo,
+  FunctionCatalog,
   Health,
   HubEvent,
   MideaDevice,
@@ -28,6 +30,11 @@ export interface TuyaLast {
 
 const POLL_MS = 30000;
 
+// PRUNE marca uma reconciliacao com payload COMPLETO (o snapshot do hub): as
+// chaves que sumiram devem sair. Um evento incremental (um DP que mudou) nao
+// pode apagar os outros campos — por isso ele nao poda.
+const PRUNE = { prune: true };
+
 class HubData {
   health = $state<Health>({});
   things = $state<Thing[]>([]);
@@ -37,6 +44,13 @@ class HubData {
   firmware = $state<FirmwareInfo>({ files: [], pending: {} });
   specs = $state<Record<string, TuyaSpec[]>>({});
 
+  /**
+   * functionLabels guarda o rotulo CADASTRADO de cada funcao do device
+   * (Funcoes e voz): dp -> label. E o mesmo rotulo que a voz reconhece, entao o
+   * card mostra exatamente o que o operador registrou.
+   */
+  functionLabels = $state<Record<string, Record<string, string>>>({});
+
   tuya = $state({
     available: true as boolean | undefined,
     devices: [] as TuyaDevice[],
@@ -44,6 +58,7 @@ class HubData {
     cloud: false,
     scan: [] as TuyaScanDevice[],
     last: {} as Record<string, TuyaLast>,
+    recent: {} as Record<string, TuyaLast[]>,
   });
 
   midea = $state({
@@ -65,43 +80,61 @@ class HubData {
   #poll: ReturnType<typeof setInterval> | null = null;
 
   // load busca o snapshot completo. `force` ignora o guard de reentrancia.
+  //
+  // O snapshot e RECONCILIADO (nao substituido): o poll roda a cada 30 s e
+  // reescrever os objetos invalidaria toda a UI — inclusive um campo que o
+  // operador esta editando. Com a reconciliacao, um snapshot identico nao
+  // notifica ninguem.
   async load(force = false) {
     if (this.loading && !force) return;
     this.loading = true;
     try {
       this.health = await api.health();
       const [th, rm, dv, au] = await Promise.all([api.things(), api.rooms(), api.devices(), api.automations()]);
-      this.things = th.things ?? [];
-      this.rooms = rm.rooms ?? [];
-      this.devices = dv.devices ?? [];
-      this.automations = au.automations ?? [];
+      reconcileList(this.things, th.things ?? [], PRUNE);
+      reconcileList(this.rooms, rm.rooms ?? [], PRUNE);
+      reconcileList(this.devices, dv.devices ?? [], PRUNE);
+      reconcileList(this.automations, au.automations ?? [], PRUNE);
 
       try {
-        this.firmware = await api.firmware();
+        const fw = await api.firmware();
+        reconcileField(this.firmware, "files", fw.files ?? []);
+        reconcileField(this.firmware, "pending", fw.pending ?? {});
       } catch {
-        this.firmware = { files: [], pending: {} };
+        reconcileField(this.firmware, "files", []);
+        reconcileField(this.firmware, "pending", {});
       }
 
       if (this.tuya.available !== false) {
         try {
           const r = await api.tuyaDevices();
-          this.tuya.available = true;
-          this.tuya.devices = r.devices ?? [];
-          this.tuya.listening = r.listening ?? [];
-          this.tuya.cloud = !!r.cloud;
+          reconcileField(this.tuya, "available", true);
+          // `state` sempre existe: e o objeto em que os DPs sao gravados um a
+          // um, entao a referencia precisa ser estavel entre snapshots.
+          reconcileList(
+            this.tuya.devices,
+            (r.devices ?? []).map((d) => ({ ...d, state: d.state ?? {} })),
+            PRUNE,
+          );
+          reconcileField(this.tuya, "listening", r.listening ?? []);
+          reconcileField(this.tuya, "cloud", !!r.cloud);
         } catch {
-          this.tuya.available = false;
+          reconcileField(this.tuya, "available", false);
         }
       }
 
       if (this.midea.available !== false) {
         try {
           const r = await api.mideaDevices();
-          this.midea.available = true;
-          this.midea.devices = r.devices ?? [];
-          this.midea.cloud = !!r.cloud;
+          reconcileField(this.midea, "available", true);
+          reconcileList(
+            this.midea.devices,
+            (r.devices ?? []).map((d) => ({ ...d, state: d.state ?? {} })),
+            PRUNE,
+          );
+          reconcileField(this.midea, "cloud", !!r.cloud);
         } catch {
-          this.midea.available = false;
+          reconcileField(this.midea, "available", false);
         }
       }
 
@@ -120,8 +153,8 @@ class HubData {
   async refreshRegistry() {
     try {
       const [th, dv] = await Promise.all([api.things(), api.devices()]);
-      this.things = th.things ?? [];
-      this.devices = dv.devices ?? [];
+      reconcileList(this.things, th.things ?? [], PRUNE);
+      reconcileList(this.devices, dv.devices ?? [], PRUNE);
     } catch {
       /* mantem o ultimo snapshot */
     }
@@ -132,7 +165,7 @@ class HubData {
   async loadAutomations() {
     try {
       const au = await api.automations();
-      this.automations = au.automations ?? [];
+      reconcileList(this.automations, au.automations ?? [], PRUNE);
     } catch {
       /* mantem a ultima lista */
     }
@@ -142,17 +175,23 @@ class HubData {
     return this.things.find((t) => t.id === id);
   }
 
+  // As escritas abaixo gravam DP/campo a CAMPO, nunca trocando o objeto que os
+  // componentes leem. Trocar o objeto invalidaria todo mundo que depende dele
+  // (inclusive campos de configuracao sem relacao com o update).
   updateThingState(thing: string, deviceID: string, reported: Record<string, unknown>) {
     const t = this.findThing(thing);
     if (!t || !deviceID) return;
     t.states ??= {};
     const sh = t.states[deviceID] ?? (t.states[deviceID] = {});
-    sh.reported = { ...(sh.reported ?? {}), ...reported };
+    sh.reported ??= {};
+    reconcileObject(sh.reported, reported);
   }
 
   updateThingStatus(thing: string, status: ThingStatus) {
     const t = this.findThing(thing);
-    if (t && status) t.status = { ...(t.status ?? {}), ...status };
+    if (!t || !status) return;
+    t.status ??= {};
+    reconcileObject(t.status, status);
   }
 
   updateThingEvent(thing: string, event: Record<string, unknown>) {
@@ -162,14 +201,17 @@ class HubData {
 
   updateTuyaState(id: string, dps: Record<string, unknown>) {
     const d = this.tuya.devices.find((x) => x.id === id);
-    if (d) d.state = { ...(d.state ?? {}), ...dps };
+    if (!d) return;
+    d.state ??= {};
+    reconcileObject(d.state, dps);
   }
 
   updateMideaState(id: string, state: Record<string, unknown>) {
     const d = this.midea.devices.find((x) => x.id === id);
     if (!d) return;
-    d.state = { ...(d.state ?? {}), ...state };
-    d.online = true;
+    d.state ??= {};
+    reconcileObject(d.state, state);
+    reconcileField(d, "online", true);
   }
 
   applyEvent(ev: HubEvent) {
@@ -260,6 +302,36 @@ class HubData {
     );
     for (const r of results) {
       if (r.status === "fulfilled") this.specs[r.value[0]] = r.value[1];
+    }
+  }
+
+  // setFunctionLabels guarda os rotulos cadastrados (dp -> label) de um device.
+  setFunctionLabels(id: string, catalog?: FunctionCatalog | null) {
+    const map: Record<string, string> = {};
+    for (const f of catalog?.functions ?? []) {
+      if (f.label) map[f.key] = f.label;
+    }
+    this.functionLabels[id] = map;
+  }
+
+  #labelsLoading = new Set<string>();
+
+  // loadFunctionLabels busca (uma vez por device) o rotulo cadastrado de cada
+  // funcao. E o que o card mostra: o rotulo registrado em Funcoes e voz, nao um
+  // dicionario fixo no front.
+  async loadFunctionLabels(ids: string[]) {
+    const pending = ids.filter((id) => id && !this.functionLabels[id] && !this.#labelsLoading.has(id));
+    if (!pending.length) return;
+    for (const id of pending) this.#labelsLoading.add(id);
+    const results = await Promise.allSettled(
+      pending.map((id) => api.deviceFunctions(id).then((r) => ({ id, catalog: r.catalog }))),
+    );
+    for (let i = 0; i < results.length; i++) {
+      const id = pending[i];
+      this.#labelsLoading.delete(id);
+      const r = results[i];
+      if (r.status !== "fulfilled") continue;
+      this.setFunctionLabels(id, r.value.catalog);
     }
   }
 }

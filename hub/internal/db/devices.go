@@ -47,15 +47,21 @@ type Device struct {
 	// CloudOnly marks a device reached through the Tuya cloud instead of the
 	// LAN: the hub does not open a LAN listener for it and polls its state from
 	// the cloud. Used for battery devices that sleep (locks).
-	CloudOnly bool      `json:"cloud_only,omitempty"`
-	CreatedAt time.Time `json:"created_at,omitempty"`
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	CloudOnly bool `json:"cloud_only,omitempty"`
+	// Sort is the display order of the device inside its room (lower first).
+	Sort int `json:"sort"`
+	// FunctionsJSON stores the per-device function labels the voice resolver
+	// and "desligar tudo" use. An empty string means "derive the defaults"; an
+	// empty JSON array means "configured, with no functions". Opaque here.
+	FunctionsJSON string    `json:"functions,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
 }
 
 // FanID is the stable id of a discovered sub-device of a gateway.
 func FanID(owner, deviceID string) string { return owner + "/" + deviceID }
 
-const deviceCols = `id, kind, name, firmware_name, ip, port, version, local_key, product_key, device22, key_source, key_updated_at, token, url, room_id, owner, device_id, template, created_at, updated_at, category, cloud_only`
+const deviceCols = `id, kind, name, firmware_name, ip, port, version, local_key, product_key, device22, key_source, key_updated_at, token, url, room_id, owner, device_id, template, created_at, updated_at, category, cloud_only, sort, functions_json`
 
 // UpsertDevice writes a device, merging with any existing row. Empty fields do
 // not overwrite a stored value, so a scan (no key) never erases a key learned
@@ -175,9 +181,80 @@ func (s *Store) SetDeviceURL(ctx context.Context, id, url string) error {
 	return s.setDeviceField(ctx, id, "url", url)
 }
 
-// SetDeviceRoom assigns (or clears with an empty roomID) a device's room.
+// SetDeviceRoom assigns (or clears with an empty roomID) a device's room. When
+// the room changes, the device is appended to the end of the destination room's
+// order, so it does not jump in front of devices the operator already arranged.
 func (s *Store) SetDeviceRoom(ctx context.Context, id, roomID string) error {
-	return s.setDeviceField(ctx, id, "room_id", roomID)
+	if strings.TrimSpace(id) == "" {
+		return errors.New("db: device id is required")
+	}
+	var current string
+	if err := s.db.QueryRowContext(ctx, `SELECT room_id FROM devices WHERE id = ?`, id).Scan(&current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		return fmt.Errorf("db: read room of %s: %w", id, err)
+	}
+	if current == roomID {
+		return nil
+	}
+	now := formatTime(time.Now().UTC())
+	res, err := s.db.ExecContext(ctx, `
+UPDATE devices SET
+    room_id = ?,
+    sort = COALESCE((SELECT MAX(sort) FROM devices WHERE room_id = ? AND id <> ?), -1) + 1,
+    updated_at = ?
+WHERE id = ?`, roomID, roomID, id, now, id)
+	if err != nil {
+		return fmt.Errorf("db: set room %s: %w", id, err)
+	}
+	return ensureAffected(res, id)
+}
+
+// SetDeviceOrder writes the display order of one room's devices. ids lists the
+// device ids in the wanted order, top first; every id must exist and belong to
+// the same room, otherwise nothing is written.
+func (s *Store) SetDeviceOrder(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return errors.New("db: device order is empty")
+	}
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		room := ""
+		roomSet := false
+		seen := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			if seen[id] {
+				return fmt.Errorf("db: duplicate device %s in order", id)
+			}
+			seen[id] = true
+			var r string
+			if err := tx.QueryRowContext(ctx, `SELECT room_id FROM devices WHERE id = ?`, id).Scan(&r); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("%w: %s", ErrNotFound, id)
+				}
+				return fmt.Errorf("db: read room of %s: %w", id, err)
+			}
+			if !roomSet {
+				room, roomSet = r, true
+			} else if r != room {
+				return errors.New("db: device order must be within a single room")
+			}
+		}
+		now := formatTime(time.Now().UTC())
+		for i, id := range ids {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE devices SET sort = ?, updated_at = ? WHERE id = ?`, i, now, id); err != nil {
+				return fmt.Errorf("db: set order of %s: %w", id, err)
+			}
+		}
+		return nil
+	})
+}
+
+// SetDeviceFunctions stores the opaque function labels of a device. An empty
+// value restores the derived defaults.
+func (s *Store) SetDeviceFunctions(ctx context.Context, id, functionsJSON string) error {
+	return s.setDeviceField(ctx, id, "functions_json", functionsJSON)
 }
 
 // SetDeviceTemplate sets (or clears with an empty value, meaning "infer") the
@@ -332,7 +409,7 @@ func scanDevice(sc scanner) (Device, error) {
 	)
 	if err := sc.Scan(&d.ID, &d.Kind, &d.Name, &d.FirmwareName, &d.IP, &d.Port, &d.Version, &d.LocalKey, &d.ProductKey,
 		&device22, &d.KeySource, &keyUpdated, &d.Token, &d.URL, &d.RoomID, &d.Owner, &d.DeviceID, &d.Template, &created, &upd,
-		&d.Category, &cloudOnly); err != nil {
+		&d.Category, &cloudOnly, &d.Sort, &d.FunctionsJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Device{}, ErrNotFound
 		}

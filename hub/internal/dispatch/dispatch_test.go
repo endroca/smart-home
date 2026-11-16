@@ -121,6 +121,57 @@ func TestDispatchTuyaDPToFan(t *testing.T) {
 	}
 }
 
+// TestDispatchReconnectSnapshotRecoversPress covers the reconnect path: the
+// first snapshot of a device only seeds, but a later snapshot (the listener
+// reconnected after the link dropped) must fire the press that happened during
+// the gap instead of silently swallowing it.
+func TestDispatchReconnectSnapshotRecoversPress(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := Save(ctx, store, Automation{
+		ID: "a1", Name: "Luz", Enabled: true,
+		Source:  Source{Type: SourceTuyaDP, Device: "sw1", DP: "1", Value: true},
+		Actions: []Action{{Kind: ActionFan, Thing: "rf01", DeviceID: "fan0", State: map[string]any{"light": true}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fans := &fakeFans{calls: make(chan fanCall, 4)}
+	svc := &fakeSvc{}
+	d := New(store, svc, fans, &fakeTuya{calls: make(chan tuyaCall, 1)})
+	d.Start(ctx)
+
+	// First snapshot seeds only: the value matches the rule but nothing fires,
+	// so a boot or a fresh device never replays its state into automations.
+	svc.emit("sw1", service.EventRecord{Kind: "status", DPs: map[string]any{"1": true}})
+	select {
+	case c := <-fans.calls:
+		t.Fatalf("seeding snapshot fired: %+v", c)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// A reconnect snapshot with a non-matching value is a change but no action.
+	svc.emit("sw1", service.EventRecord{Kind: "status", DPs: map[string]any{"1": false}})
+	select {
+	case c := <-fans.calls:
+		t.Fatalf("snapshot fired for the non-matching value: %+v", c)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// The next snapshot carries the press given while the link was down: the
+	// delta against the last known value must fire.
+	svc.emit("sw1", service.EventRecord{Kind: "status", DPs: map[string]any{"1": true}})
+	select {
+	case c := <-fans.calls:
+		if c.thing != "rf01" || c.deviceID != "fan0" || c.state["light"] != true {
+			t.Fatalf("unexpected action: %+v", c)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnect snapshot did not fire the recovered press")
+	}
+}
+
 func TestDispatchTuyaToTuyaAndManual(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -485,6 +536,61 @@ func TestDispatchThingState(t *testing.T) {
 	}
 }
 
+// TestDispatchCorrectionDoesNotFire covers the operator's "make the known state
+// match reality" action: a corrected state is not something the device did, so
+// it must not fire an automation (nor write back to another device through a
+// sync rule). The corrected value is still remembered, so the next real change
+// is measured against it.
+func TestDispatchCorrectionDoesNotFire(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := Save(ctx, store, Automation{
+		ID: "luz", Name: "Luz do ventilador", Enabled: true,
+		Source:  Source{Type: SourceThingState, Device: "rf01/fan0", DP: "light", Value: true},
+		Actions: []Action{{Kind: ActionTuya, Device: "lamp1", DP: "1", Value: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tuya := &fakeTuya{calls: make(chan tuyaCall, 2)}
+	d := New(store, &fakeSvc{}, &fakeFans{calls: make(chan fanCall, 1)}, tuya)
+	d.Start(ctx)
+	defer d.Close()
+
+	at := time.Date(2026, 11, 13, 20, 0, 0, 0, time.Local)
+	d.HandleThingState("rf01", "fan0", map[string]any{"light": false}, at)
+
+	// A correction that matches the rule's value must not fire.
+	d.HandleThingState("rf01", "fan0", map[string]any{"light": true, "source": "correction"}, at)
+	select {
+	case c := <-tuya.calls:
+		t.Fatalf("correction fired an automation: %+v", c)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// The corrected value was remembered: a real change back to false fires the
+	// rule only if it matches, and a repeated corrected value does not re-fire.
+	d.HandleThingState("rf01", "fan0", map[string]any{"light": true, "source": "http"}, at)
+	select {
+	case c := <-tuya.calls:
+		t.Fatalf("unchanged value fired: %+v", c)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// A real device change away and back must fire again.
+	d.HandleThingState("rf01", "fan0", map[string]any{"light": false, "source": "rf_remote"}, at)
+	d.HandleThingState("rf01", "fan0", map[string]any{"light": true, "source": "rf_remote"}, at)
+	select {
+	case c := <-tuya.calls:
+		if c.id != "lamp1" || c.value != true {
+			t.Fatalf("unexpected call: %+v", c)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a real change after a correction did not fire")
+	}
+}
+
 // TestDispatchEventBusThingState checks the wiring from the hub bus to the
 // dispatcher, so a real fan state event (not only a direct handler call) fires.
 func TestDispatchEventBusThingState(t *testing.T) {
@@ -825,5 +931,237 @@ func TestDispatchWeeklyRearms(t *testing.T) {
 	want := time.Date(2026, 11, 20, 14, 0, 0, 0, time.Local).Format(time.RFC3339)
 	if src.FireAt != want {
 		t.Fatalf("rearmed fire_at = %q, want %q", src.FireAt, want)
+	}
+}
+
+// TestDispatchOnlyUserIgnoresAutomationEcho reproduces the cyclic pair the
+// operator described: a switch turns the fan light on, and the fan light turns
+// the switch on. With both rules marked "only when the user starts it", the
+// chain must stop after the first hop instead of looping.
+func TestDispatchOnlyUserIgnoresAutomationEcho(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// A: switch (Tuya dp) on -> fan light on.
+	if err := Save(ctx, store, Automation{
+		ID: "a1", Name: "Interruptor liga a luz", Enabled: true,
+		Source:  Source{Type: SourceTuyaDP, Device: "sw1", DP: "1", Value: true, OnlyUser: true},
+		Actions: []Action{{Kind: ActionFan, Thing: "rf01", DeviceID: "fan0", State: map[string]any{"light": true}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// B: fan light on -> switch on.
+	if err := Save(ctx, store, Automation{
+		ID: "b1", Name: "Luz liga o interruptor", Enabled: true,
+		Source:  Source{Type: SourceThingState, Device: "rf01/fan0", DP: "light", Value: true, OnlyUser: true},
+		Actions: []Action{{Kind: ActionTuya, Device: "sw1", DP: "1", Value: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fans := &fakeFans{calls: make(chan fanCall, 4)}
+	tuya := &fakeTuya{calls: make(chan tuyaCall, 4)}
+	svc := &fakeSvc{}
+	d := New(store, svc, fans, tuya)
+	d.Start(ctx)
+
+	// The user turns the switch on: A fires and sets the fan light.
+	svc.emit("sw1", service.EventRecord{Kind: "dp", DPs: map[string]any{"1": true}})
+	select {
+	case c := <-fans.calls:
+		if c.state["light"] != true {
+			t.Fatalf("unexpected fan action: %+v", c)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("A did not fire")
+	}
+
+	// The fan reports the light the action just turned on. B watches that
+	// change but is "only user", so it must NOT fire back at the switch.
+	d.HandleThingState("rf01", "fan0", map[string]any{"light": true}, time.Now())
+	select {
+	case c := <-tuya.calls:
+		t.Fatalf("B fired on an automation echo: %+v", c)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestDispatchChainStillWorksWithoutOnlyUser proves the flag is the opt-out:
+// an automation-caused change still triggers a rule that did not set it.
+func TestDispatchChainStillWorksWithoutOnlyUser(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := Save(ctx, store, Automation{
+		ID: "a1", Name: "Interruptor liga a luz", Enabled: true,
+		Source:  Source{Type: SourceTuyaDP, Device: "sw1", DP: "1", Value: true},
+		Actions: []Action{{Kind: ActionFan, Thing: "rf01", DeviceID: "fan0", State: map[string]any{"light": true}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(ctx, store, Automation{
+		ID: "b1", Name: "Luz liga o interruptor", Enabled: true,
+		Source:  Source{Type: SourceThingState, Device: "rf01/fan0", DP: "light", Value: true},
+		Actions: []Action{{Kind: ActionTuya, Device: "sw1", DP: "1", Value: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fans := &fakeFans{calls: make(chan fanCall, 4)}
+	tuya := &fakeTuya{calls: make(chan tuyaCall, 4)}
+	svc := &fakeSvc{}
+	d := New(store, svc, fans, tuya)
+	d.Start(ctx)
+
+	svc.emit("sw1", service.EventRecord{Kind: "dp", DPs: map[string]any{"1": true}})
+	select {
+	case <-fans.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("A did not fire")
+	}
+
+	d.HandleThingState("rf01", "fan0", map[string]any{"light": true}, time.Now())
+	select {
+	case c := <-tuya.calls:
+		if c.id != "sw1" || c.value != true {
+			t.Fatalf("unexpected chained action: %+v", c)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("B should have chained")
+	}
+}
+
+// TestMatchOnlyUserFiresForUserChange checks the flag only filters automation
+// origins, never a change the user made.
+func TestMatchOnlyUserFiresForUserChange(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := Save(ctx, store, Automation{
+		ID: "a1", Name: "Só usuário", Enabled: true,
+		Source:  Source{Type: SourceTuyaDP, Device: "sw1", DP: "1", Value: true, OnlyUser: true},
+		Actions: []Action{{Kind: ActionTuya, Device: "lamp1", DP: "1", Value: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tuya := &fakeTuya{calls: make(chan tuyaCall, 2)}
+	d := New(store, &fakeSvc{}, &fakeFans{calls: make(chan fanCall, 1)}, tuya)
+	d.Start(ctx)
+
+	d.match("sw1", "1", true, time.Now(), origin{})
+	select {
+	case <-tuya.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("only_user rule did not fire for a user change")
+	}
+}
+
+// TestMatchSelfEchoNeverRefires checks a rule ignores the state its own action
+// produced, so a rule that watches and writes the same key cannot loop.
+func TestMatchSelfEchoNeverRefires(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := Save(ctx, store, Automation{
+		ID: "a1", Name: "Auto-eco", Enabled: true,
+		Source:  Source{Type: SourceTuyaDP, Device: "d1", DP: "1"},
+		Actions: []Action{{Kind: ActionTuya, Device: "d1", DP: "1", Value: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tuya := &fakeTuya{calls: make(chan tuyaCall, 2)}
+	d := New(store, &fakeSvc{}, &fakeFans{calls: make(chan fanCall, 1)}, tuya)
+	d.Start(ctx)
+
+	// The arriving change is the echo of a1's own action: it must be skipped.
+	d.match("d1", "1", true, time.Now(), origin{automation: "a1", depth: 1})
+	select {
+	case c := <-tuya.calls:
+		t.Fatalf("rule re-fired on its own echo: %+v", c)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestMatchBackstopStopsDeepChain checks the depth backstop drops a change that
+// already traveled maxDepth hops, even when only_user is off.
+func TestMatchBackstopStopsDeepChain(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := Save(ctx, store, Automation{
+		ID: "a1", Name: "Cadeia", Enabled: true,
+		Source:  Source{Type: SourceTuyaDP, Device: "d1", DP: "1", Value: true},
+		Actions: []Action{{Kind: ActionTuya, Device: "d1", DP: "2", Value: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tuya := &fakeTuya{calls: make(chan tuyaCall, 2)}
+	d := New(store, &fakeSvc{}, &fakeFans{calls: make(chan fanCall, 1)}, tuya)
+	d.Start(ctx)
+	d.maxDepth = 3
+
+	d.match("d1", "1", true, time.Now(), origin{automation: "other", depth: 3})
+	select {
+	case c := <-tuya.calls:
+		t.Fatalf("fired past the depth backstop: %+v", c)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// One hop below the cap still fires.
+	d.match("d1", "1", true, time.Now(), origin{automation: "other", depth: 2})
+	select {
+	case <-tuya.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rule should fire below the depth cap")
+	}
+}
+
+// TestActionDetail checks the journal summary that tells an automation's real
+// effect apart: a transmitted fan command, a suppressed one (the firmware
+// already believed the state) and a plain transport mode.
+func TestActionDetail(t *testing.T) {
+	tests := []struct {
+		name string
+		res  map[string]any
+		want string
+	}{
+		{"nil", nil, ""},
+		{"transmitted", map[string]any{"transmitted": []string{"light"}}, " (transmitido: light)"},
+		{"suppressed", map[string]any{"transmitted": []string{}}, " (sem transmissão: o device já estava no estado pedido)"},
+		{"mode", map[string]any{"mode": "lan"}, " (lan)"},
+		{"empty mode", map[string]any{"mode": ""}, ""},
+	}
+	for _, tt := range tests {
+		if got := actionDetail(tt.res); got != tt.want {
+			t.Errorf("%s: actionDetail = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestFanEchoDerivesStates checks the echo of a fan command also covers the
+// states the firmware keeps consistent (power/speed/light).
+func TestFanEchoDerivesStates(t *testing.T) {
+	tests := []struct {
+		name  string
+		state map[string]any
+		want  map[string]any
+	}{
+		{"power on", map[string]any{"power": true}, map[string]any{"power": true, "speed": float64(1)}},
+		{"power off", map[string]any{"power": false}, map[string]any{"power": false, "speed": float64(0), "light": false}},
+		{"speed up", map[string]any{"speed": int64(3)}, map[string]any{"speed": int64(3), "power": true}},
+		{"speed zero", map[string]any{"speed": int64(0)}, map[string]any{"speed": int64(0), "power": false}},
+		{"direction", map[string]any{"direction": "reverse"}, map[string]any{"direction": "reverse", "power": true, "speed": float64(1)}},
+		{"light only", map[string]any{"light": true}, map[string]any{"light": true}},
+	}
+	for _, tt := range tests {
+		got := fanEcho(tt.state)
+		if len(got) != len(tt.want) {
+			t.Fatalf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+		for k, v := range tt.want {
+			if !equal(got[k], v) {
+				t.Fatalf("%s: key %s = %v, want %v", tt.name, k, got[k], v)
+			}
+		}
 	}
 }

@@ -204,6 +204,15 @@ func systemPrompt(cat *Catalog) string {
 	}
 	writeDevices("Ventiladores", cat.Fans)
 	writeDevices("Dispositivos Tuya", cat.Tuya)
+	// Function labels the operator configured, so the model can tell them apart
+	// from device names and pick the right action.
+	for _, d := range append(append(append([]db.Device{}, cat.Fans...), cat.Tuya...), cat.Midea...) {
+		labels := functionLabels(cat.Functions[d.ID], 6)
+		if len(labels) == 0 {
+			continue
+		}
+		b.WriteString("Funções de " + labelOf(d) + ": " + strings.Join(labels, ", ") + "\n")
+	}
 	if len(cat.Scenes) > 0 {
 		b.WriteString("Cenas: ")
 		for i, sc := range cat.Scenes {

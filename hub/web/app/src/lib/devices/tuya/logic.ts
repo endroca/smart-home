@@ -53,8 +53,11 @@ export const DP_INFO: Record<string, DpInfo> = {
   cur_voltage: { label: "Tensão", desc: "Tensão da rede medida (V)." },
   cur_current: { label: "Corrente", desc: "Corrente medida (A)." },
   countdown_1: { label: "Timer", desc: "Desliga após o tempo definido." },
+  countdown_2: { label: "Timer", desc: "Desliga após o tempo definido." },
+  countdown_3: { label: "Timer", desc: "Desliga após o tempo definido." },
   countdown: { label: "Timer", desc: "Desliga após o tempo definido." },
   child_lock: { label: "Trava infantil", desc: "Bloqueia o controle físico do aparelho." },
+  switch_backlight: { label: "Luz de fundo", desc: "Iluminação das teclas do interruptor." },
   switch_1: { label: "Chave 1" },
   switch_2: { label: "Chave 2" },
   switch_3: { label: "Chave 3" },
@@ -95,6 +98,13 @@ export function dpLabel(spec?: TuyaSpec | null): string {
   if (!spec) return "";
   const info = DP_INFO[spec.code];
   return spec.name || info?.label || spec.code || "";
+}
+
+// keyLabel resolve o rotulo de uma tecla de um device: o rotulo CADASTRADO
+// (Funcoes e voz -> dp) vence, porque e ele que a voz reconhece; sem ele cai no
+// nome da spec / dicionario curado.
+export function keyLabel(spec: TuyaSpec, labels?: Record<string, string>): string {
+  return labels?.[spec.dp_id] || dpLabel(spec);
 }
 
 // dpDesc resolve a descricao: a da spec (quando util) > dicionario.
@@ -160,7 +170,48 @@ export function tuyaBoolSpecs(specs: TuyaSpec[] | undefined): TuyaSpec[] {
 
 // TUYA_SWITCH_EXCLUDE sao DPs booleanos que configuram o aparelho em vez de
 // acionar uma saida, entao "desligar tudo" precisa deixa-los em paz.
-export const TUYA_SWITCH_EXCLUDE = ["switch_inching", "child_lock", "overcharge_switch"];
+export const TUYA_SWITCH_EXCLUDE = [
+  "switch_inching",
+  "switch_backlight",
+  "child_lock",
+  "overcharge_switch",
+];
+
+// TUYA_OUTPUT_CODES sao as saidas booleanas sem sufixo numerico (chaves
+// mestras de tomada, rele, luz de painel e USB).
+export const TUYA_OUTPUT_CODES = ["power", "relay", "switch", "switch_led", "switch_usb"];
+
+// isTuyaGangCode reconhece as teclas numeradas de um interruptor multi-tecla
+// (switch_1, switch_2, ...). Um sufixo nao numerico (switch_led, switch_usb,
+// switch_backlight) NAO e tecla.
+export function isTuyaGangCode(code?: string): boolean {
+  return /^switch_[0-9]+$/.test(String(code ?? ""));
+}
+
+// isTuyaOutputCode indica se um codigo e uma saida acionavel (e nao um DP de
+// configuracao como o backlight ou a pulsacao).
+export function isTuyaOutputCode(code?: string): boolean {
+  const c = String(code ?? "");
+  return TUYA_OUTPUT_CODES.includes(c) || isTuyaGangCode(c);
+}
+
+// tuyaGangSpecs lista as teclas de um interruptor multi-tecla: os booleanos
+// graváveis switch_N, na ordem das teclas (switch_2 antes de switch_10).
+export function tuyaGangSpecs(specs: TuyaSpec[] | undefined): TuyaSpec[] {
+  return tuyaBoolSpecs(specs)
+    .filter((s) => s.writable !== false && isTuyaGangCode(s.code))
+    .sort((a, b) => gangNumber(a.code) - gangNumber(b.code));
+}
+
+function gangNumber(code: string): number {
+  return Number(String(code).replace("switch_", "")) || 0;
+}
+
+// tuyaIsMultiGang indica se o device tem duas ou mais teclas — e o que
+// distingue um interruptor multi-tecla de um simples liga/desliga.
+export function tuyaIsMultiGang(specs: TuyaSpec[] | undefined): boolean {
+  return tuyaGangSpecs(specs).length >= 2;
+}
 
 // tuyaOffSpecs lista as saidas booleanas graváveis de um device Tuya: cada
 // gang de um multi-switch, mais as chaves power/relay/light/USB.
@@ -168,7 +219,7 @@ export function tuyaOffSpecs(d: { specs?: TuyaSpec[] }): TuyaSpec[] {
   return tuyaBoolSpecs(d.specs ?? [])
     .filter((s) => s.writable !== false)
     .filter((s) => !TUYA_SWITCH_EXCLUDE.includes(s.code))
-    .filter((s) => s.code === "power" || s.code === "relay" || /^switch/.test(s.code ?? ""));
+    .filter((s) => isTuyaOutputCode(s.code));
 }
 
 // tuyaHasTelemetry indica se o device expoe alguma grandeza de medicao.
@@ -184,6 +235,7 @@ export interface TuyaRow {
   kind: string;
   room_id?: string;
   template?: string;
+  sort?: number;
 }
 
 // buildTuyaDevices junta os devices Tuya (fonte de verdade) com as specs
@@ -206,6 +258,7 @@ export function buildTuyaDevices(
       name: d.name || d.id,
       room: stored.room_id || d.room_id || "",
       template: stored.template || d.template || "",
+      sort: stored.sort ?? 0,
       category: d.category,
       cloud_only: d.cloud_only,
       specs: specs[d.id] ?? [],

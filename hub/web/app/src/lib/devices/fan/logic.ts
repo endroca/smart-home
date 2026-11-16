@@ -82,6 +82,7 @@ export function fanView(
     pendingManifest: !m.caps,
     room: row.room_id || "",
     template: row.template || "",
+    sort: row.sort ?? 0,
   };
 }
 

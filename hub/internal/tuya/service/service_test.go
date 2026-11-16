@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"smart_home/hub/internal/db"
+	"smart_home/hub/internal/eventbus"
 	"smart_home/hub/internal/tuya"
 	"smart_home/hub/internal/tuya/cloudstream"
 )
@@ -470,6 +471,68 @@ func TestObservedSpecsInference(t *testing.T) {
 	}
 }
 
+func TestObserveSkipsUnchangedDPSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hub.db")
+	addDevice(t, path, db.Device{ID: "dev1", Kind: db.KindTuya, Name: "sala"})
+	svc := newService(t, path, Config{})
+
+	bus := eventbus.New()
+	svc.SetEventBus(bus)
+	events, cancel := bus.Subscribe()
+	defer cancel()
+
+	_, cancelListener := context.WithCancel(context.Background())
+	defer cancelListener()
+	svc.mu.Lock()
+	svc.listeners["dev1"] = &listener{cancel: cancelListener}
+	svc.mu.Unlock()
+
+	drain := func() int {
+		n := 0
+		for {
+			select {
+			case <-events:
+				n++
+			case <-time.After(50 * time.Millisecond):
+				return n
+			}
+		}
+	}
+
+	// The first report is news and must be published.
+	svc.appendEvent("dev1", EventRecord{Kind: "dp", DPs: map[string]any{"1": true, "2": float64(0)}})
+	if got := drain(); got != 1 {
+		t.Fatalf("first report should publish once, got %d", got)
+	}
+
+	// The device re-sends the same snapshot: nothing to tell the UI.
+	for i := 0; i < 3; i++ {
+		svc.appendEvent("dev1", EventRecord{Kind: "dp", DPs: map[string]any{"1": true, "2": float64(0)}})
+	}
+	if got := drain(); got != 0 {
+		t.Fatalf("unchanged snapshots must not publish, got %d", got)
+	}
+
+	// A real change still goes through, and so does a partial report.
+	svc.appendEvent("dev1", EventRecord{Kind: "dp", DPs: map[string]any{"1": false}})
+	if got := drain(); got != 1 {
+		t.Fatalf("a changed DP should publish, got %d", got)
+	}
+	// A partial report repeating the known value is not news.
+	svc.appendEvent("dev1", EventRecord{Kind: "dp", DPs: map[string]any{"2": 0}})
+	if got := drain(); got != 0 {
+		t.Fatalf("unchanged partial report must not publish, got %d", got)
+	}
+	// The persisted state keeps the last known values.
+	states, err := svc.store.States(context.Background(), "dev1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states["1"] != false || states["2"] != float64(0) {
+		t.Fatalf("persisted state wrong: %+v", states)
+	}
+}
+
 func TestParseVersion(t *testing.T) {
 	if parseVersion("") != "" || parseVersion("auto") != "" {
 		t.Fatal("empty/auto should yield an empty version")
@@ -616,6 +679,83 @@ func TestAutoListenSkipsCloudOnly(t *testing.T) {
 	svc.mu.Unlock()
 	if !cached {
 		t.Fatal("cloud_only set not cached for Online")
+	}
+}
+
+// TestSetCloudOnlyTogglesRuntime covers the "Ler pela nuvem" toggle: it must
+// take effect immediately (the LAN listener stops) and seed the report cursor
+// so enabling the cloud never replays recent history into automations.
+func TestSetCloudOnlyTogglesRuntime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hub.db")
+	addDevice(t, path, db.Device{
+		ID: "sw1", Kind: db.KindTuya, Name: "Lampada", LocalKey: "0123456789abcdef",
+		IP: "127.0.0.1", Version: "3.4",
+	})
+	svc := newService(t, path, Config{Cloud: tuya.CloudConfig{AccessID: "id", AccessSecret: "secret", Region: "us", BaseURL: "http://127.0.0.1:0"}})
+	ctx := context.Background()
+
+	before := time.Now().UnixMilli()
+	if err := svc.SetCloudOnly(ctx, "sw1", true); err != nil {
+		t.Fatalf("enable cloud: %v", err)
+	}
+	dev, err := svc.store.GetDevice(ctx, "sw1")
+	if err != nil || !dev.CloudOnly {
+		t.Fatalf("cloud_only not set: %+v (%v)", dev, err)
+	}
+	if got := svc.Listening(); len(got) != 0 {
+		t.Fatalf("the LAN listener must stop when switching to cloud: %v", got)
+	}
+	cur, ok, err := svc.store.ReportCursor(ctx, "sw1")
+	if err != nil || !ok {
+		t.Fatalf("cursor not seeded: ok=%v err=%v", ok, err)
+	}
+	if cur < before-2000 {
+		t.Fatalf("cursor not seeded to now: %d < %d", cur, before)
+	}
+
+	if err := svc.SetCloudOnly(ctx, "sw1", false); err != nil {
+		t.Fatalf("disable cloud: %v", err)
+	}
+	if dev, _ = svc.store.GetDevice(ctx, "sw1"); dev.CloudOnly {
+		t.Fatalf("cloud_only not cleared: %+v", dev)
+	}
+}
+
+// TestSetCloudOnlyRequiresCloud checks the toggle is refused when the cloud is
+// not configured, instead of leaving a device with no event source at all.
+func TestSetCloudOnlyRequiresCloud(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hub.db")
+	addDevice(t, path, db.Device{ID: "sw1", Kind: db.KindTuya, Name: "Lampada", LocalKey: "0123456789abcdef", IP: "127.0.0.1"})
+	svc := newService(t, path, Config{})
+
+	if err := svc.SetCloudOnly(context.Background(), "sw1", true); !errors.Is(err, ErrCloudNotConfigured) {
+		t.Fatalf("want ErrCloudNotConfigured, got %v", err)
+	}
+}
+
+// TestRecentEventsRingBuffer checks the per-device event log is bounded and
+// keeps the newest entries in chronological order.
+func TestRecentEventsRingBuffer(t *testing.T) {
+	svc := newService(t, filepath.Join(t.TempDir(), "hub.db"), Config{})
+
+	for i := 0; i < eventLogCap+5; i++ {
+		svc.recordEvent("sw1", EventRecord{At: time.Unix(int64(i), 0), Kind: "dp", DPs: map[string]any{"1": i%2 == 0}})
+	}
+	got := svc.RecentEvents("sw1", 0)
+	if len(got) != eventLogCap {
+		t.Fatalf("ring buffer not capped: got %d, want %d", len(got), eventLogCap)
+	}
+	if last := got[len(got)-1].At.Unix(); last != int64(eventLogCap+4) {
+		t.Fatalf("newest entry wrong: %d", last)
+	}
+	if first := got[0].At.Unix(); first != 5 {
+		t.Fatalf("oldest entry wrong: %d", first)
+	}
+	if n := svc.RecentEvents("sw1", 3); len(n) != 3 || n[2].At.Unix() != int64(eventLogCap+4) {
+		t.Fatalf("limit not honored: %+v", n)
+	}
+	if n := svc.RecentEvents("absent", 5); len(n) != 0 {
+		t.Fatalf("unknown device should have no events: %+v", n)
 	}
 }
 

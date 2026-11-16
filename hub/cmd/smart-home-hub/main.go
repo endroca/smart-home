@@ -17,6 +17,7 @@ import (
 	"smart_home/hub/internal/db"
 	"smart_home/hub/internal/dispatch"
 	"smart_home/hub/internal/eventbus"
+	"smart_home/hub/internal/functions"
 	"smart_home/hub/internal/httpapi"
 	"smart_home/hub/internal/hub"
 	mideasvc "smart_home/hub/internal/midea"
@@ -155,6 +156,13 @@ func main() {
 		log.Printf("voice: STT enabled (%s / %s, lang=%s)", stt.Provider, stt.Model, stt.Language)
 	}
 	api.SetVoice(voiceSvc)
+
+	// Functions: the per-device function catalog (labels for the voice and the
+	// actions "desligar tudo" runs). It is derived from each device's
+	// capabilities and can be edited per device in the UI.
+	functionsSvc := functions.New(store, h)
+	api.SetFunctions(functionsSvc)
+	voiceSvc.SetFunctions(functionsSvc)
 
 	srv, err := api.Serve(cfg.HTTPAddr)
 	if err != nil {

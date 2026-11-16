@@ -7,11 +7,16 @@ import {
   dpDesc,
   dpLabel,
   DP_INFO,
+  isTuyaGangCode,
+  isTuyaOutputCode,
+  keyLabel,
   MASTER_CODES,
   specByCode,
   TELEMETRY,
   tuyaBoolSpecs,
+  tuyaGangSpecs,
   tuyaHasTelemetry,
+  tuyaIsMultiGang,
   tuyaOffSpecs,
   tuyaTelemetry,
   tuyaVal,
@@ -129,6 +134,73 @@ describe("tuyaOffSpecs", () => {
     ];
     expect(tuyaOffSpecs({ specs }).map((s) => s.code)).toEqual(["power", "relay", "switch_led"]);
   });
+
+  it("nunca inclui o backlight nem DPs switch_* de configuracao", () => {
+    const specs = [
+      tuyaSpec({ dp_id: "1", code: "switch_1", type: "Boolean" }),
+      tuyaSpec({ dp_id: "16", code: "switch_backlight", type: "Boolean" }),
+      tuyaSpec({ dp_id: "4", code: "switch_inching", type: "Boolean" }),
+    ];
+    expect(tuyaOffSpecs({ specs }).map((s) => s.code)).toEqual(["switch_1"]);
+  });
+});
+
+describe("isTuyaGangCode / isTuyaOutputCode", () => {
+  it("reconhece apenas teclas numeradas", () => {
+    expect(isTuyaGangCode("switch_1")).toBe(true);
+    expect(isTuyaGangCode("switch_12")).toBe(true);
+    expect(isTuyaGangCode("switch_led")).toBe(false);
+    expect(isTuyaGangCode("switch_backlight")).toBe(false);
+    expect(isTuyaGangCode("switch_usb")).toBe(false);
+    expect(isTuyaGangCode("switch")).toBe(false);
+    expect(isTuyaGangCode(undefined)).toBe(false);
+  });
+
+  it("distingue saida de DP de configuracao", () => {
+    expect(isTuyaOutputCode("power")).toBe(true);
+    expect(isTuyaOutputCode("switch_usb")).toBe(true);
+    expect(isTuyaOutputCode("switch_3")).toBe(true);
+    expect(isTuyaOutputCode("switch_backlight")).toBe(false);
+    expect(isTuyaOutputCode("countdown_2")).toBe(false);
+  });
+});
+
+describe("tuyaGangSpecs", () => {
+  const gangSpecs = [
+    tuyaSpec({ dp_id: "2", code: "switch_2", type: "Boolean" }),
+    tuyaSpec({ dp_id: "10", code: "switch_10", type: "Boolean" }),
+    tuyaSpec({ dp_id: "1", code: "switch_1", type: "Boolean" }),
+    tuyaSpec({ dp_id: "16", code: "switch_backlight", type: "Boolean" }),
+    tuyaSpec({ dp_id: "4", code: "switch_inching", type: "Boolean" }),
+    tuyaSpec({ dp_id: "5", code: "switch_3", type: "Boolean", writable: false }),
+  ];
+
+  it("lista so as teclas gravaveis, em ordem numerica", () => {
+    expect(tuyaGangSpecs(gangSpecs).map((s) => s.code)).toEqual(["switch_1", "switch_2", "switch_10"]);
+  });
+
+  it("devolve lista vazia quando nao ha tecla numerada", () => {
+    expect(tuyaGangSpecs(undefined)).toEqual([]);
+    expect(
+      tuyaGangSpecs([
+        tuyaSpec({ dp_id: "16", code: "switch_backlight", type: "Boolean" }),
+        tuyaSpec({ dp_id: "4", code: "switch_inching", type: "Boolean" }),
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe("tuyaIsMultiGang", () => {
+  it("exige duas ou mais teclas", () => {
+    const one = [tuyaSpec({ dp_id: "1", code: "switch_1", type: "Boolean" })];
+    const two = [
+      tuyaSpec({ dp_id: "1", code: "switch_1", type: "Boolean" }),
+      tuyaSpec({ dp_id: "2", code: "switch_2", type: "Boolean" }),
+    ];
+    expect(tuyaIsMultiGang(one)).toBe(false);
+    expect(tuyaIsMultiGang(two)).toBe(true);
+    expect(tuyaIsMultiGang(undefined)).toBe(false);
+  });
 });
 
 describe("buildTuyaDevices", () => {
@@ -178,6 +250,26 @@ describe("buildTuyaDevices", () => {
   it("usa o id como nome quando o device nao tem nome", () => {
     const [view] = buildTuyaDevices([tuyaDevice({ id: "sem-nome" })], {});
     expect(view.name).toBe("sem-nome");
+  });
+});
+
+describe("keyLabel", () => {
+  it("usa o rotulo cadastrado (Funcoes e voz) quando existe", () => {
+    const spec = tuyaSpec({ dp_id: "1", code: "switch_1", type: "Boolean" });
+    expect(keyLabel(spec, { "1": "Luz Principal" })).toBe("Luz Principal");
+  });
+
+  it("cai no dicionario/spec quando nao ha rotulo cadastrado", () => {
+    const spec = tuyaSpec({ dp_id: "1", code: "switch_1", type: "Boolean" });
+    expect(keyLabel(spec)).toBe("Chave 1");
+    expect(keyLabel(spec, {})).toBe("Chave 1");
+    expect(keyLabel(spec, { "2": "Outra" })).toBe("Chave 1");
+  });
+
+  it("o nome da spec vence o dicionario quando o rotulo nao foi cadastrado", () => {
+    const spec = tuyaSpec({ dp_id: "1", code: "switch_1", type: "Boolean", name: "Abajur" });
+    expect(keyLabel(spec)).toBe("Abajur");
+    expect(keyLabel(spec, { "1": "Luz Principal" })).toBe("Luz Principal");
   });
 });
 

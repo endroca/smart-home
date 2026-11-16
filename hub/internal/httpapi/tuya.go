@@ -262,6 +262,7 @@ func (s *Server) tuyaEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":        true,
 		"last":      lastView,
+		"recent":    s.tuya.RecentEvents(id, 20),
 		"listening": s.tuya.Listening(),
 		"state":     state,
 	})

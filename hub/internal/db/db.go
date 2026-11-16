@@ -25,7 +25,7 @@ import (
 var ErrNotFound = errors.New("db: not found")
 
 // schemaVersion is the current on-disk schema version.
-const schemaVersion = 17
+const schemaVersion = 18
 
 // Store is a SQLite-backed hub store. It is safe for concurrent use.
 type Store struct {
@@ -154,6 +154,11 @@ func (s *Store) migrate() error {
 	}
 	if v < 17 {
 		if err := s.migrateV17(); err != nil {
+			return err
+		}
+	}
+	if v < 18 {
+		if err := s.migrateV18(); err != nil {
 			return err
 		}
 	}
@@ -481,6 +486,35 @@ func (s *Store) migrateV17() error {
 	}
 	if _, err := s.db.Exec("ALTER TABLE automations ADD COLUMN once INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("db: add automations.once: %w", err)
+	}
+	return nil
+}
+
+// migrateV18 adds the per-room display order and the per-device function
+// labels.
+//
+// `sort` positions a device inside its room (lower first); it defaults to 0,
+// and the UI keeps the current visual order (by type, then name) until the
+// operator arranges a room. `functions_json` holds the labels the voice
+// resolver and "desligar tudo" use: an empty string means "derive the
+// defaults", an empty JSON array means "configured, with no functions". It is
+// opaque to this package.
+func (s *Store) migrateV18() error {
+	cols, err := s.columns("devices")
+	if err != nil {
+		return err
+	}
+	adds := []struct{ name, def string }{
+		{"sort", "INTEGER NOT NULL DEFAULT 0"},
+		{"functions_json", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, a := range adds {
+		if cols[a.name] {
+			continue
+		}
+		if _, err := s.db.Exec("ALTER TABLE devices ADD COLUMN " + a.name + " " + a.def); err != nil {
+			return fmt.Errorf("db: add devices.%s: %w", a.name, err)
+		}
 	}
 	return nil
 }

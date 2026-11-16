@@ -45,6 +45,24 @@ export async function tuyaControl(id: string, dp: string, value: unknown): Promi
   }
 }
 
+// tuyaSetAll escreve varios DPs de uma vez (Ligar/Desligar todas as teclas de
+// um interruptor multi-tecla) e mostra um unico feedback, em vez de um toast
+// por tecla.
+export async function tuyaSetAll(id: string, updates: { dp: string; value: unknown }[]): Promise<void> {
+  if (!updates.length) return;
+  try {
+    const state: Record<string, unknown> = {};
+    for (const u of updates) {
+      await api.tuyaControl(id, u.dp, u.value);
+      state[u.dp] = u.value;
+    }
+    hub.updateTuyaState(id, state);
+    toast.show(updates.length === 1 ? "Tuya: ok" : `${updates.length} chaves atualizadas`);
+  } catch (e) {
+    toast.show((e as Error).message, true);
+  }
+}
+
 // tuyaRefreshState rele o estado atual do device no hub.
 export async function tuyaRefreshState(id: string): Promise<void> {
   try {
@@ -93,15 +111,19 @@ export async function tuyaToggleListen(id: string, action: "start" | "stop"): Pr
   }
 }
 
-// tuyaShowLast busca o ultimo evento cru do device e sincroniza o estado.
+// tuyaShowLast busca o ultimo evento cru do device e sincroniza o estado. O
+// mesmo endpoint devolve o log recente, que e o que permite ver se uma pressao
+// chegou (e onde houve reconexao) em vez de so o ultimo valor.
 export async function tuyaShowLast(id: string): Promise<void> {
   try {
     const e = (await api.get(`/api/tuya/events?id=${api.enc(id)}`)) as {
       last?: TuyaLast;
+      recent?: TuyaLast[];
       listening?: string[];
       state?: Record<string, unknown>;
     };
     if (e.last) hub.tuya.last[id] = e.last;
+    if (e.recent) hub.tuya.recent[id] = e.recent;
     if (e.listening) hub.tuya.listening = e.listening;
     if (e.state) hub.updateTuyaState(id, e.state);
   } catch (err) {
@@ -116,6 +138,7 @@ export async function tuyaForget(id: string): Promise<void> {
     await api.tuyaForget(id);
     delete hub.specs[id];
     delete hub.tuya.last[id];
+    delete hub.tuya.recent[id];
     toast.show("Removido");
     await hub.load(true);
   } catch (e) {

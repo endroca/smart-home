@@ -9,15 +9,20 @@
   import SmallSwitch from "$lib/ui/SmallSwitch.svelte";
   import Toggle from "$lib/ui/Toggle.svelte";
   import { accentOf } from "$lib/ui/accent";
+  import { hub } from "$lib/stores/data.svelte";
   import { kindBadge, roomChipName } from "$lib/devices/display";
-  import { dpDesc, dpLabel, tuyaBoolSpecs, tuyaVal, type TuyaView } from "../tuya/logic";
+  import { dpDesc, keyLabel, tuyaBoolSpecs, tuyaVal, type TuyaView } from "../tuya/logic";
   import { tuyaControl } from "../tuya/actions";
   import TimerButton from "$lib/automations/TimerButton.svelte";
 
   let { device, onOpenConfig }: { device: TuyaView; onOpenConfig?: (id: string) => void } = $props();
 
+  const EMPTY_LABELS: Record<string, string> = {};
+
   const specs = $derived(device.specs ?? []);
   const bools = $derived(tuyaBoolSpecs(specs).filter((s) => s.writable !== false));
+  // Rotulos cadastrados (Funcoes e voz): a chave mostra o mesmo nome que a voz.
+  const labels = $derived(hub.functionLabels[device.id] ?? EMPTY_LABELS);
   const hero = $derived(bools.length === 1 ? bools[0] : null);
   const heroOn = $derived(hero ? tuyaVal(device, hero) === true : false);
   const roomName = $derived(roomChipName(device.room));
@@ -114,7 +119,7 @@
         </span>
         <div class="min-w-0">
           <div class="truncate font-headline-sm text-headline-sm font-semibold {heroOn ? a.text : 'text-on-surface'}">
-            {dpLabel(hero)}
+            {keyLabel(hero, labels)}
           </div>
           <div class="truncate font-label-sm text-label-sm text-on-surface-variant">
             {heroOn ? "Ligado" : "Desligado"}{dpDesc(hero) ? " • " + dpDesc(hero) : ""}
@@ -152,14 +157,14 @@
             />
             <div class="min-w-0">
               <div class="truncate font-body-md text-body-md font-medium leading-tight text-on-surface">
-                {dpLabel(s)}
+                {keyLabel(s, labels)}
               </div>
               <div class="truncate font-label-sm text-label-sm text-on-surface-variant">
                 {dpDesc(s) || "DP " + s.dp_id}
               </div>
             </div>
           </div>
-          <SmallSwitch {on} label={dpLabel(s)} onclick={() => tuyaControl(device.id, s.dp_id, !on)} />
+          <SmallSwitch {on} label={keyLabel(s, labels)} onclick={() => tuyaControl(device.id, s.dp_id, !on)} />
         </div>
       {/each}
     </div>

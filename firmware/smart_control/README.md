@@ -197,8 +197,10 @@ estar configurada.
 
 - No boot: carrega config/estado do NVS, conecta Wi-Fi, empurra `status` e todos
   os estados, e atende a sondagem de manifesto do hub.
-- RX capta o controle físico → identifica fan/comando pelo frame aprendido,
-  atualiza o estado e empurra `state` com `source: "rf_remote"`.
+- RX capta o controle físico → identifica fan/comando comparando só as 3
+  primeiras partes do frame aprendido (a 4a é o contador/rolling code e é
+  ignorada no match), atualiza o estado e empurra `state` com
+  `source: "rf_remote"`.
 - TX tem guarda de ~1,5 s (`selfTxGuardUntil`) para o RX não captar a própria
   transmissão.
 - Comandos comparam com o estado conhecido; sem diff, não há RF. Com

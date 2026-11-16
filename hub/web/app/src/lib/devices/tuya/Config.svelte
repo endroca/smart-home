@@ -10,7 +10,7 @@
   import Icon from "$lib/ui/Icon.svelte";
   import SmallSwitch from "$lib/ui/SmallSwitch.svelte";
   import { hub } from "$lib/stores/data.svelte";
-  import { refreshSpecs, renameTuya, setTuyaCloudOnly, setTuyaRoom, tuyaForget, tuyaRefreshState, tuyaToggleListen } from "./actions";
+  import { refreshSpecs, renameTuya, setTuyaCloudOnly, setTuyaRoom, tuyaForget, tuyaRefreshState, tuyaShowLast, tuyaToggleListen } from "./actions";
   import SpecControls from "./SpecControls.svelte";
   import type { TuyaView } from "./logic";
 
@@ -24,10 +24,17 @@
   const cloudOnly = $derived(!!device.cloud_only);
   const rooms = $derived(hub.rooms ?? []);
   const last = $derived(hub.tuya.last[device.id]);
+  const recent = $derived(hub.tuya.recent[device.id] ?? []);
   const roomOptions = $derived([
     { value: "", label: "sem cômodo" },
     ...rooms.map((r) => ({ value: r.id, label: r.name })),
   ]);
+
+  // Carrega o log recente ao abrir o painel, para nao depender de apertar
+  // "Ouvir". Assim da para ver se uma pressao chegou (e onde houve reconexao).
+  $effect(() => {
+    void tuyaShowLast(device.id);
+  });
 </script>
 
 {#if advanced.length}
@@ -85,11 +92,20 @@
 </ConfigSection>
 
 {#if last}
-  <div
-    class="mt-space-sm max-h-28 overflow-y-auto overflow-x-hidden rounded-lg bg-surface-container-lowest p-2 font-mono text-[10px] leading-relaxed text-on-surface-variant break-all"
-  >
-    último: {last.at ? new Date(last.at).toLocaleTimeString() : ""}
-    {last.kind}
-    {JSON.stringify(last.dps)}
-  </div>
+  <ConfigSection title="Eventos recentes">
+    <div
+      class="mt-space-sm max-h-56 overflow-y-auto overflow-x-hidden rounded-lg bg-surface-container-lowest p-2 font-mono text-[10px] leading-relaxed text-on-surface-variant"
+    >
+      {#each recent as ev}
+        <div class="flex gap-2">
+          <span class="shrink-0 opacity-70">{ev.at ? new Date(ev.at).toLocaleTimeString() : ""}</span>
+          <span class="shrink-0 {ev.kind === "status" ? "text-primary" : ""}">{ev.kind}</span>
+          <span class="break-all">{JSON.stringify(ev.dps)}</span>
+        </div>
+      {/each}
+    </div>
+    <p class="mt-1 text-[10px] text-on-surface-variant">
+      "status" marca (re)conexão do link LAN; "report" vem da nuvem.
+    </p>
+  </ConfigSection>
 {/if}

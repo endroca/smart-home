@@ -1,10 +1,10 @@
 // Sucessor do antigo smoke.mjs: monta cada tela com dados de exemplo e falha
 // se algo lancar (campo renomeado no backend so aparece quebrando a tela).
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/svelte";
 import { setApi } from "$lib/api";
 import { hub } from "$lib/stores/data.svelte";
-import { nav } from "$lib/stores/nav.svelte";
+import { nav, roomFilter } from "$lib/stores/nav.svelte";
 import { makeFakeApi, type FakeApi } from "$lib/test/fakeApi";
 import { cap, deviceRow, manifestDevice, mideaDevice, sampleRooms, thing, tuyaDevice } from "$lib/test/fixtures";
 import Home from "./Home.svelte";
@@ -58,6 +58,7 @@ beforeEach(() => {
 afterEach(() => {
   setApi(null);
   nav.detail = null;
+  roomFilter.active = "";
 });
 
 describe("páginas renderizam com dados de exemplo", () => {
@@ -67,6 +68,21 @@ describe("páginas renderizam com dados de exemplo", () => {
     // "Sala" aparece na aba de comodo e no chip do card.
     expect(screen.getAllByText("Sala").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Desligar tudo")).toBeInTheDocument();
+  });
+
+  it("Início rola a barra de cômodos até o cômodo ativo ao abrir", () => {
+    roomFilter.active = "quarto";
+    const spy = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      render(Home);
+      const chip = document.querySelector('[data-room-id="quarto"]');
+      expect(chip).not.toBeNull();
+      // O chip ativo e trazido para a area visivel da barra.
+      expect(spy).toHaveBeenCalled();
+      expect(spy.mock.instances[0]).toBe(chip);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("Cômodos lista os grupos", async () => {

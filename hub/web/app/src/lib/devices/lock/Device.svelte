@@ -58,11 +58,11 @@
       Sem dados ainda. A fechadura dorme em Wi‑Fi; o hub relê o estado pela nuvem. Use a engrenagem para carregar as specs.
     </div>
   {:else}
-    <div class="grid grid-cols-1 gap-space-sm sm:grid-cols-2">
+    <div class="grid grid-cols-2 gap-space-sm">
       {#if battery !== null}
         <Stat label="Bateria" value={String(Math.round(battery))} unit="%" icon="battery" accent={batteryAccent} bar={battery} />
       {/if}
-      <div class="flex flex-col justify-between gap-2 rounded-2xl border border-outline-variant/40 bg-surface-container-lowest/70 p-space-md">
+      <div class="flex flex-col justify-between gap-2 rounded-2xl border border-outline-variant/40 bg-surface-container-lowest/70 p-space-md {battery === null ? 'col-span-2' : ''}">
         <div class="flex items-center justify-between gap-1">
           <span class="font-label-md text-label-md text-on-surface-variant">Tranca reversa</span>
           <Icon name="lock" cls="h-4 w-4 text-on-surface-variant" />

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"smart_home/hub/internal/db"
+	"smart_home/hub/internal/functions"
 )
 
 // probeAsync kicks a LAN discovery in the background so a newly registered or
@@ -50,6 +51,7 @@ type deviceView struct {
 	Template     string    `json:"template,omitempty"`
 	Category     string    `json:"category,omitempty"`
 	CloudOnly    bool      `json:"cloud_only,omitempty"`
+	Sort         int       `json:"sort"`
 	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 }
 
@@ -74,6 +76,7 @@ func deviceViewOf(d db.Device) deviceView {
 		Template:     d.Template,
 		Category:     d.Category,
 		CloudOnly:    d.CloudOnly,
+		Sort:         d.Sort,
 		UpdatedAt:    d.UpdatedAt,
 	}
 }
@@ -143,9 +146,23 @@ func (s *Server) devices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
-	id, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/devices/"))
+	rest := strings.TrimPrefix(r.URL.Path, "/api/devices/")
+	if strings.HasSuffix(rest, "/functions") {
+		id, err := url.PathUnescape(strings.TrimSuffix(rest, "/functions"))
+		if err != nil || id == "" {
+			writeError(w, http.StatusBadRequest, "invalid_id", "invalid device id")
+			return
+		}
+		s.deviceFunctions(w, r, id)
+		return
+	}
+	id, err := url.PathUnescape(rest)
 	if err != nil || id == "" {
 		writeError(w, http.StatusBadRequest, "invalid_id", "invalid device id")
+		return
+	}
+	if id == "order" {
+		s.deviceOrder(w, r)
 		return
 	}
 	switch r.Method {
@@ -213,7 +230,16 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if req.CloudOnly != nil {
-			if err := s.store.SetDeviceCloudOnly(r.Context(), id, *req.CloudOnly); err != nil {
+			// The Tuya service owns the runtime side of the toggle: it stops or
+			// restarts the LAN listener and seeds the cloud report cursor, so
+			// flipping "Ler pela nuvem" takes effect immediately instead of
+			// waiting for the current listener to drop on its own.
+			if s.tuya != nil {
+				if err := s.tuya.SetCloudOnly(r.Context(), id, *req.CloudOnly); err != nil {
+					writeDBError(w, err)
+					return
+				}
+			} else if err := s.store.SetDeviceCloudOnly(r.Context(), id, *req.CloudOnly); err != nil {
 				writeDBError(w, err)
 				return
 			}
@@ -234,6 +260,77 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+// deviceOrder sets the display order of one room's devices. The body carries
+// the ids in the wanted order; they must all belong to the same room.
+func (s *Server) deviceOrder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
+		return
+	}
+	if err := s.store.SetDeviceOrder(r.Context(), req.IDs); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeDBError(w, err)
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_order", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// deviceFunctions reads or replaces the function catalog of a device: the
+// labels the voice resolver matches and the actions "desligar tudo" runs.
+func (s *Server) deviceFunctions(w http.ResponseWriter, r *http.Request, id string) {
+	if s.functions == nil {
+		writeError(w, http.StatusServiceUnavailable, "functions_unavailable", "the function service is not available")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		cat, err := s.functions.Catalog(r.Context(), id)
+		if err != nil {
+			writeDBError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "catalog": cat})
+	case http.MethodPost, http.MethodPut:
+		var req struct {
+			Functions []functions.Config `json:"functions"`
+		}
+		if err := decode(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
+			return
+		}
+		// A missing/ null "functions" restores the derived defaults; an empty
+		// array means "configured, with no functions".
+		var cat *functions.Catalog
+		var err error
+		if req.Functions == nil {
+			cat, err = s.functions.Reset(r.Context(), id)
+		} else {
+			cat, err = s.functions.Save(r.Context(), id, req.Functions)
+		}
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				writeDBError(w, err)
+				return
+			}
+			writeError(w, http.StatusBadRequest, "invalid_functions", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "catalog": cat})
 	default:
 		methodNotAllowed(w)
 	}

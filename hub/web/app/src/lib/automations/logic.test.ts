@@ -226,6 +226,52 @@ describe("conversao rascunho <-> JSON", () => {
     const saved = automationFromDraft(draft, []);
     expect(saved.schedule).toBeUndefined();
   });
+
+  it("nova automação nasce com 'só quando o usuário inicia'", () => {
+    expect(emptyDraft().onlyUser).toBe(true);
+  });
+
+  it("preserva only_user no gatilho de dispositivo e limpa em manual/horário", () => {
+    const device = draftFromAutomation({
+      id: "a5",
+      name: "Ciclo",
+      enabled: true,
+      source: { type: "tuya_dp", device: "sw1", dp: "1", value: true, only_user: true },
+      actions: [{ kind: "tuya", device: "lamp1", dp: "1", value: true }],
+    });
+    expect(device.onlyUser).toBe(true);
+    expect(sourceFromDraft(device, []).only_user).toBe(true);
+
+    const manual = draftFromAutomation({
+      id: "a6",
+      name: "Cena",
+      enabled: true,
+      source: { type: "manual", only_user: true },
+      actions: [{ kind: "tuya", device: "lamp1", dp: "1", value: true }],
+    });
+    expect(sourceFromDraft(manual, []).only_user).toBeUndefined();
+
+    const timed = draftFromAutomation({
+      id: "a7",
+      name: "Hora",
+      enabled: true,
+      source: { type: "time", at: "22:00", only_user: true },
+      actions: [{ kind: "tuya", device: "lamp1", dp: "1", value: true }],
+    });
+    expect(sourceFromDraft(timed, []).only_user).toBeUndefined();
+  });
+
+  it("automação antiga sem only_user fica como usuário desligado", () => {
+    const draft = draftFromAutomation({
+      id: "a8",
+      name: "Antiga",
+      enabled: true,
+      source: { type: "tuya_dp", device: "sw1", dp: "1", value: true },
+      actions: [{ kind: "tuya", device: "lamp1", dp: "1", value: true }],
+    });
+    expect(draft.onlyUser).toBe(false);
+    expect(sourceFromDraft(draft, []).only_user).toBeUndefined();
+  });
 });
 
 describe("rotulos e validacao", () => {

@@ -51,6 +51,13 @@
   $effect(() => {
     if (hub.tuya.available && hub.tuya.devices.some((d) => !hub.specs[d.id])) void hub.loadSpecsForDevices();
   });
+
+  // Rotulos cadastrados (Funcoes e voz) dos devices visiveis: o card mostra o
+  // mesmo nome que a voz reconhece. Custa uma requisicao por device, uma vez.
+  $effect(() => {
+    if (!hub.loaded) return;
+    void hub.loadFunctionLabels(allDevices().map((d) => d.id));
+  });
 </script>
 
 <header class="app-header pt-safe">

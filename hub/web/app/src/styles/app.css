@@ -148,6 +148,15 @@
         user-select: none;
         touch-action: manipulation;
       }
+      /* Todo botao e um alvo de toque: o texto dentro dele nunca deve ser
+         selecionado por long-press/duplo-toque (que no celular ainda abria o
+         menu de copiar) nem disparar o callout do iOS. */
+      button {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+        touch-action: manipulation;
+      }
       .pt-safe {
         padding-top: env(safe-area-inset-top, 0px);
       }
@@ -457,7 +466,7 @@
         padding: 9px 6px;
         border: 1px solid rgb(var(--sh-hairline) / 0.07);
         border-radius: 16px;
-        background: linear-gradient(160deg, rgb(var(--sh-surface-container-high) / 0.85), rgb(var(--sh-surface-container-low) / 0.9));
+        background: rgb(var(--sh-ctrl-face) / 0.85);
         color: rgb(var(--sh-on-surface-variant));
         touch-action: manipulation;
         transition:
@@ -541,10 +550,7 @@
         padding: 7px;
         border: 1px solid rgb(var(--sh-hairline) / 0.1);
         border-radius: 18px;
-        background: linear-gradient(160deg, rgb(var(--sh-surface-container-lowest) / 0.85), rgb(var(--sh-surface-container-low) / 0.75));
-        box-shadow:
-          inset 0 1px rgba(255, 255, 255, 0.03),
-          inset 0 -2px 6px rgb(var(--sh-shadow) / 0.35);
+        background: rgb(var(--sh-ctrl-face) / 0.85);
       }
 
       .speed-seg {
@@ -584,7 +590,7 @@
 
       .speed-seg[data-active="true"] {
         border-color: rgb(var(--sh-primary) / 0.6);
-        background: linear-gradient(180deg, rgb(var(--sh-accent-hi)), rgb(var(--sh-accent)) 45%, rgb(var(--sh-accent-lo)));
+        background: rgb(var(--sh-accent));
         color: rgb(var(--sh-on-primary));
       }
 
@@ -746,6 +752,182 @@
         }
         50% {
           opacity: 0.45;
+        }
+      }
+
+      /* ---------- interruptor multi-tecla (gang) ---------- */
+
+      /* A placa segue o mesmo console dos tiles do ventilador (.ctrl-console):
+         so um recesso leve, sem profundidade extra. As teclas usam o visual
+         plano dos .ctrl-tile — borda fina, fundo solido e estado ativo em
+         primary suave. Nada de relevo/glow de "botao fisico". */
+      .gang-plate {
+        border: 1px solid rgb(var(--sh-hairline) / 0.1);
+        border-radius: 22px;
+        padding: 5px;
+        background: linear-gradient(160deg, rgb(var(--sh-surface-container-lowest) / 0.8), rgb(var(--sh-surface-container-low) / 0.9));
+        box-shadow:
+          inset 0 1px rgba(255, 255, 255, 0.04),
+          inset 0 -1px rgb(var(--sh-shadow) / 0.45);
+      }
+
+      .gang-keys {
+        display: grid;
+        grid-template-columns: repeat(var(--gang-cols, 3), minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .gang-key {
+        display: flex;
+        min-height: 152px;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 14px 6px;
+        border: 1px solid rgb(var(--sh-hairline) / 0.07);
+        border-radius: 16px;
+        background: rgb(var(--sh-ctrl-face) / 0.85);
+        color: rgb(var(--sh-on-surface-variant));
+        touch-action: manipulation;
+        transition:
+          transform 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+          color 0.2s ease,
+          border-color 0.2s ease,
+          background-color 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+
+      .gang-key:hover {
+        border-color: rgb(var(--sh-hairline) / 0.16);
+        color: rgb(var(--sh-icon-hi));
+      }
+
+      .gang-key:focus-visible {
+        outline: 2px solid rgb(var(--sh-primary) / 0.5);
+        outline-offset: 2px;
+      }
+
+      .gang-key[data-on="true"] {
+        border-color: rgb(var(--sh-primary) / 0.45);
+        background: rgb(var(--sh-primary) / 0.13);
+        color: rgb(var(--sh-primary));
+      }
+
+      .gang-key-head {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        text-align: center;
+      }
+
+      .gang-key-name {
+        overflow: hidden;
+        max-width: 100%;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .gang-key-desc {
+        overflow: hidden;
+        max-width: 100%;
+        color: rgb(var(--sh-on-surface-variant));
+        font-size: 10px;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* Icone solto, como no .ctrl-tile — sem pastilha/relevo. So muda de cor
+         quando a tecla liga. */
+      .gang-key-sensor {
+        display: grid;
+        flex: none;
+        place-items: center;
+        color: rgb(var(--sh-on-surface-variant));
+        transition: color 0.2s ease;
+      }
+
+      .gang-key[data-on="true"] .gang-key-sensor {
+        color: rgb(var(--sh-primary));
+      }
+
+      .gang-key-status {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .gang-led {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: rgb(var(--sh-outline-variant));
+        transition:
+          background-color 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+
+      .gang-key[data-on="true"] .gang-led {
+        background: rgb(var(--sh-primary));
+        box-shadow: 0 0 6px rgb(var(--sh-primary) / 0.5);
+      }
+
+      .gang-key-state {
+        color: rgb(var(--sh-on-surface-variant));
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .gang-key[data-on="true"] .gang-key-state {
+        color: rgb(var(--sh-primary));
+      }
+
+      /* Acoes em lote = GhostButton do kit: borda outline-variant, fundo
+         transparente e texto que acende no hover. */
+      .gang-bulk {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 8px 12px;
+        border: 1px solid rgb(var(--sh-outline-variant));
+        border-radius: 12px;
+        background: transparent;
+        color: rgb(var(--sh-on-surface-variant));
+        font-size: 12px;
+        font-weight: 500;
+        transition:
+          border-color 0.15s ease,
+          color 0.15s ease;
+      }
+
+      .gang-bulk:hover {
+        border-color: rgb(var(--sh-primary) / 0.4);
+        color: rgb(var(--sh-on-surface));
+      }
+
+      @media (max-width: 380px) {
+        .gang-key {
+          min-height: 136px;
+          padding: 12px 4px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .gang-key,
+        .gang-key-sensor,
+        .gang-led {
+          transition: none;
         }
       }
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { hub } from "$lib/stores/data.svelte";
   import { nav, roomFilter } from "$lib/stores/nav.svelte";
-  import { allDevices } from "$lib/devices/lists";
+  import { allDevices, sortDevices } from "$lib/devices/lists";
   import { addRoom, deleteRoom, saveRoom } from "$lib/actions/rooms";
   import Input from "$lib/ui/Input.svelte";
   import AsyncButton from "$lib/ui/AsyncButton.svelte";
@@ -15,8 +15,8 @@
 
   const devices = $derived(allDevices());
   const groups = $derived([
-    { id: "", name: "Sem cômodo", devices: devices.filter((d) => !d.room) },
-    ...hub.rooms.map((r) => ({ id: r.id, name: r.name, devices: devices.filter((d) => d.room === r.id) })),
+    { id: "", name: "Sem cômodo", devices: sortDevices(devices.filter((d) => !d.room)) },
+    ...hub.rooms.map((r) => ({ id: r.id, name: r.name, devices: sortDevices(devices.filter((d) => d.room === r.id)) })),
   ]);
 
   $effect(() => {

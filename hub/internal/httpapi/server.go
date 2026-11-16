@@ -17,6 +17,7 @@ import (
 	"smart_home/hub/internal/db"
 	"smart_home/hub/internal/dispatch"
 	"smart_home/hub/internal/eventbus"
+	"smart_home/hub/internal/functions"
 	"smart_home/hub/internal/hub"
 	mideasvc "smart_home/hub/internal/midea"
 	"smart_home/hub/internal/tuya/service"
@@ -33,13 +34,24 @@ type Server struct {
 	store      *db.Store
 	dispatcher *dispatch.Dispatcher
 	voice      *voice.Service
+	functions  *functions.Service
 	bus        *eventbus.Bus
+	// fanSpacing is the pause between two fan RF commands in "desligar tudo";
+	// the RF frame takes ~0.5 s and a burst collides in the transmitter.
+	fanSpacing time.Duration
 }
 
 // New creates the HTTP handler.
 func New(h *hub.Hub, cfg config.Config, store *db.Store) *Server {
-	return &Server{hub: h, cfg: cfg, store: store}
+	return &Server{hub: h, cfg: cfg, store: store, fanSpacing: 600 * time.Millisecond}
 }
+
+// SetFanSpacing overrides the pause between fan commands (used by tests).
+func (s *Server) SetFanSpacing(d time.Duration) { s.fanSpacing = d }
+
+// SetFunctions attaches the function catalog service. When it is nil the
+// per-device functions endpoints are not served.
+func (s *Server) SetFunctions(f *functions.Service) { s.functions = f }
 
 // Handler returns the root http.Handler.
 func (s *Server) Handler() http.Handler {
@@ -56,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	s.deviceRoutes(mux)
 	s.automationRoutes(mux)
 	s.voiceRoutes(mux)
+	s.offRoutes(mux)
 	mux.Handle("/", webUIHandler())
 	return mux
 }

@@ -34,6 +34,7 @@ export function buildMideaDevices(devices: MideaDevice[], rows: DeviceRow[] = []
       room: stored?.room_id || d.room_id || "",
       online: !!d.online,
       template: stored?.template || d.template || "",
+      sort: stored?.sort ?? 0,
       state: d.state ?? {},
       specs: d.actions ?? [],
       model: d.model || "",

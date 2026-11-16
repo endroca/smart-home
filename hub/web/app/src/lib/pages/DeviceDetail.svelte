@@ -4,6 +4,7 @@
   import { nav } from "$lib/stores/nav.svelte";
   import { allDevices } from "$lib/devices/lists";
   import { resolveTemplate } from "$lib/devices/registry";
+  import FunctionsConfig from "$lib/devices/FunctionsConfig.svelte";
   import { buildFans } from "$lib/devices/fan/logic";
   import { addFan, removeFan } from "$lib/devices/fan/actions";
   import {
@@ -135,6 +136,9 @@
     <div class="glass-card flex flex-col gap-4 rounded-3xl bg-surface-container p-space-lg shadow-xl">
       {#if DeviceConfig}
         <DeviceConfig {device} />
+      {/if}
+      {#if device.kind !== "thing"}
+        <FunctionsConfig deviceId={device.id} />
       {/if}
     </div>
 

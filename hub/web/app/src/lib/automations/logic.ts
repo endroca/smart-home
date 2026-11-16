@@ -106,6 +106,9 @@ export interface AutomationDraft {
   timeDays: number[];
   /** Volátil: dispara uma vez e some. No horário, só quando não é semanal. */
   once: boolean;
+  /** Só dispara quando o usuário inicia: ignora mudanças causadas por outra
+   *  automação. Padrão ligado nas novas; sem efeito em manual/horário. */
+  onlyUser: boolean;
   scheduleEnabled: boolean;
   scheduleStart: string;
   scheduleEnd: string;
@@ -180,6 +183,8 @@ const TRIGGER_IGNORE = new Set([
   "random_time",
   "countdown",
   "countdown_1",
+  "countdown_2",
+  "countdown_3",
 ]);
 
 function tuyaControl(spec: TuyaSpec): ControlOption {
@@ -529,6 +534,7 @@ export function emptyDraft(): AutomationDraft {
     timeAt: "22:00",
     timeDays: [],
     once: false,
+    onlyUser: true,
     scheduleEnabled: false,
     scheduleStart: "18:00",
     scheduleEnd: "03:00",
@@ -621,6 +627,7 @@ export function draftFromAutomation(a: Automation): AutomationDraft {
   d.name = a.name ?? "";
   d.enabled = a.enabled !== false;
   d.once = a.once === true;
+  d.onlyUser = source.only_user === true;
   d.triggerKind = triggerKind;
   d.triggerDevice = source.device ?? "";
   d.triggerEvent = dps.length > 1 ? "__unlock__" : (source.dp ?? dps[0] ?? "");
@@ -683,7 +690,15 @@ export function draftFromAutomation(a: Automation): AutomationDraft {
 
 export function sourceFromDraft(d: AutomationDraft, events: EventOption[]): AutomationSource {
   if (d.triggerKind === "manual") {
-    return { ...d.baseSource, type: "manual", device: undefined, dp: undefined, dps: undefined, value: undefined };
+    return {
+      ...d.baseSource,
+      type: "manual",
+      device: undefined,
+      dp: undefined,
+      dps: undefined,
+      value: undefined,
+      only_user: undefined,
+    };
   }
   if (d.triggerKind === "time") {
     const base: AutomationSource = {
@@ -693,6 +708,7 @@ export function sourceFromDraft(d: AutomationDraft, events: EventOption[]): Auto
       dp: undefined,
       dps: undefined,
       value: undefined,
+      only_user: undefined,
     };
     if (d.timeMode === "clock") {
       return {
@@ -733,6 +749,7 @@ export function sourceFromDraft(d: AutomationDraft, events: EventOption[]): Auto
     dp: valid.length === 1 ? valid[0] : undefined,
     dps: valid.length > 1 ? valid : undefined,
     value,
+    only_user: d.onlyUser || undefined,
   };
 }
 

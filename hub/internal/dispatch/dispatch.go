@@ -150,6 +150,11 @@ type Source struct {
 	DPs    []string `json:"dps,omitempty"`
 	Value  any      `json:"value,omitempty"`
 
+	// OnlyUser makes the rule ignore changes caused by another automation's
+	// action: it fires only on user-initiated changes. It has no effect on
+	// manual or time triggers, which are always user-initiated.
+	OnlyUser bool `json:"only_user,omitempty"`
+
 	// Time trigger (Type == SourceTime). Exactly one of At or InSecs is
 	// required. The hub resolves either into FireAt, an absolute RFC3339
 	// instant in the hub's local timezone, which is what makes the pending
@@ -246,11 +251,41 @@ type Dispatcher struct {
 	mu          sync.Mutex
 	rules       []Automation
 	last        map[string]any // deviceID + "\x00" + dp -> last seen value
+	primed      map[string]bool
 	now         func() time.Time
 	bus         *eventbus.Bus
 	busCancel   func()
 	thingStates ThingStateSource
+
+	// echoes records the state each automation action is expected to produce,
+	// keyed by (device, dp). It is how the dispatcher tells a change the user
+	// made from the echo of a change it just caused, so a rule with OnlyUser
+	// can ignore the latter and a cyclic pair of rules cannot loop forever.
+	echoes   map[string]echo
+	echoTTL  time.Duration
+	maxDepth int
 }
+
+// echo is one pending state an automation action should produce on a device.
+// It is consumed once, when the matching event arrives; a different value
+// discards it, because then the change came from the user, not the action.
+type echo struct {
+	value      any
+	automation string
+	depth      int
+	expires    time.Time
+}
+
+// origin says where a state change came from. A zero origin (automation == "")
+// means the user; otherwise it names the automation that caused it and how
+// many hops away from the user it is.
+type origin struct {
+	automation string
+	depth      int
+}
+
+// fromAutomation reports whether the change was caused by an automation action.
+func (o origin) fromAutomation() bool { return o.automation != "" }
 
 // New builds a dispatcher.
 func New(store *db.Store, svc EventSource, fans FanSetter, tuya TuyaController) *Dispatcher {
@@ -262,6 +297,10 @@ func New(store *db.Store, svc EventSource, fans FanSetter, tuya TuyaController) 
 		commandTimeout: 15 * time.Second,
 		grace:          2 * time.Minute,
 		last:           map[string]any{},
+		primed:         map[string]bool{},
+		echoes:         map[string]echo{},
+		echoTTL:        30 * time.Second,
+		maxDepth:       8,
 		now:            time.Now,
 	}
 }
@@ -378,7 +417,7 @@ func (d *Dispatcher) runDue(ctx context.Context) {
 			d.finishTime(r)
 			continue
 		}
-		d.fire(r, "time "+fire.In(time.Local).Format("15:04"))
+		d.fire(r, "time "+fire.In(time.Local).Format("15:04"), 0)
 		d.finishTime(r)
 	}
 }
@@ -508,14 +547,30 @@ func (d *Dispatcher) HandleThingState(thing, deviceID string, reported map[strin
 	}
 	key := "thing:" + thing + "/" + deviceID
 	device := thing + "/" + deviceID
+	// A correction only fixes what the hub believes a device's state is; it is
+	// not something the device did. It must never fire an automation (nor write
+	// back to another device through a sync rule), or an operator's "make the
+	// known state match reality" would command the devices it is trying to
+	// describe. The corrected values are still remembered so a later real change
+	// is measured against them.
+	if src, _ := reported["source"].(string); src == sourceCorrection {
+		for name, value := range reported {
+			d.remember(key, name, normalize(value))
+		}
+		return
+	}
 	for name, value := range reported {
 		val := normalize(value)
 		if !d.changed(key, name, val) {
 			continue
 		}
-		d.match(device, name, val, at)
+		d.match(device, name, val, at, d.takeEcho(device, name, val))
 	}
 }
+
+// sourceCorrection is the state-source the firmware reports after a /correct:
+// the known state was edited by the operator without any RF being transmitted.
+const sourceCorrection = "correction"
 
 // Reload re-reads the rules and makes sure every source device is being
 // listened to.
@@ -579,7 +634,7 @@ func (d *Dispatcher) HandleMideaState(deviceID string, state map[string]any) {
 		if !d.changed(deviceID, key, val) {
 			continue
 		}
-		d.match(deviceID, key, val, at)
+		d.match(deviceID, key, val, at, d.takeEcho(deviceID, key, val))
 	}
 }
 
@@ -590,8 +645,25 @@ func (d *Dispatcher) onEvent(deviceID string, e service.EventRecord) {
 	}
 	switch e.Kind {
 	case "status":
+		// The listener emits a full snapshot when it (re)connects. The first
+		// snapshot for a device only seeds the last-value map, so a boot or a
+		// freshly registered device does not replay its state into automations.
+		// Every snapshot after that is a reconnect: the device kept running
+		// while the link was down, so a press given during the gap is recovered
+		// here (as a delta against the last known value) instead of being lost.
+		if !d.isPrimed(deviceID) {
+			for dp, v := range e.DPs {
+				d.remember(deviceID, dp, normalize(v))
+			}
+			d.markPrimed(deviceID)
+			return
+		}
 		for dp, v := range e.DPs {
-			d.remember(deviceID, dp, normalize(v))
+			val := normalize(v)
+			if !d.changed(deviceID, dp, val) {
+				continue
+			}
+			d.match(deviceID, dp, val, at, d.takeEcho(deviceID, dp, val))
 		}
 		return
 	case "report":
@@ -601,7 +673,7 @@ func (d *Dispatcher) onEvent(deviceID string, e service.EventRecord) {
 		for dp, v := range e.DPs {
 			val := normalize(v)
 			d.remember(deviceID, dp, val)
-			d.match(deviceID, dp, val, at)
+			d.match(deviceID, dp, val, at, d.takeEcho(deviceID, dp, val))
 		}
 		return
 	case "dp":
@@ -613,11 +685,11 @@ func (d *Dispatcher) onEvent(deviceID string, e service.EventRecord) {
 		if !d.changed(deviceID, dp, val) {
 			continue
 		}
-		d.match(deviceID, dp, val, at)
+		d.match(deviceID, dp, val, at, d.takeEcho(deviceID, dp, val))
 	}
 }
 
-func (d *Dispatcher) match(deviceID, dp string, val any, at time.Time) {
+func (d *Dispatcher) match(deviceID, dp string, val any, at time.Time, orig origin) {
 	d.mu.Lock()
 	rules := append([]Automation(nil), d.rules...)
 	d.mu.Unlock()
@@ -639,7 +711,23 @@ func (d *Dispatcher) match(deviceID, dp string, val any, at time.Time) {
 		if !r.Schedule.Active(at) {
 			continue
 		}
-		d.fire(r, fmt.Sprintf("dp %s=%v on %s", dp, val, deviceID))
+		if orig.fromAutomation() {
+			// A rule never re-fires itself through its own effect.
+			if orig.automation == r.ID {
+				continue
+			}
+			// "Só quando o usuário inicia": ignore automation-caused changes.
+			if r.Source.OnlyUser {
+				continue
+			}
+			// Backstop for a cycle that the flag did not cover: a chain longer
+			// than maxDepth is a loop, so stop and log it.
+			if orig.depth >= d.maxDepth {
+				log.Printf("[dispatch] loop detected at %s/%s (depth %d), skipping %q", deviceID, dp, orig.depth, r.Name)
+				continue
+			}
+		}
+		d.fire(r, fmt.Sprintf("dp %s=%v on %s", dp, val, deviceID), orig.depth)
 	}
 }
 
@@ -670,67 +758,204 @@ func (d *Dispatcher) Run(ctx context.Context, id string) (int, error) {
 		if !r.Enabled {
 			return 0, fmt.Errorf("dispatch: automation %s is disabled", id)
 		}
-		d.fire(r, "manual "+id)
+		d.fire(r, "manual "+id, 0)
 		return len(r.Actions), nil
 	}
 	return 0, db.ErrNotFound
 }
 
-func (d *Dispatcher) fire(r Automation, reason string) {
+// fire starts the actions of one rule. depth is the chain depth of the change
+// that triggered it: 0 when the user started it, or the depth of the echo it
+// reacted to.
+func (d *Dispatcher) fire(r Automation, reason string, depth int) {
 	if r.Delay.Enabled && r.Delay.Ms > 0 {
 		go func() {
 			for _, a := range r.Actions {
 				time.Sleep(time.Duration(r.Delay.Ms) * time.Millisecond)
-				d.runOne(r, a, reason)
+				d.runOne(r, a, reason, depth)
 			}
 		}()
 		return
 	}
 	for _, a := range r.Actions {
 		a := a
-		go d.runOne(r, a, reason)
+		go d.runOne(r, a, reason, depth)
 	}
 }
 
-func (d *Dispatcher) runOne(r Automation, a Action, reason string) {
+func (d *Dispatcher) runOne(r Automation, a Action, reason string, depth int) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.commandTimeout)
 	defer cancel()
-	if err := d.runAction(ctx, a, r.ID); err != nil {
+	res, err := d.runAction(ctx, a, r.ID, depth)
+	if err != nil {
 		log.Printf("[dispatch] %q (%s) action %s failed: %v", r.Name, reason, a.Kind, err)
 		return
 	}
-	log.Printf("[dispatch] %q (%s) action %s ok", r.Name, reason, a.Kind)
+	log.Printf("[dispatch] %q (%s) action %s ok%s", r.Name, reason, a.Kind, actionDetail(res))
 }
 
-func (d *Dispatcher) runAction(ctx context.Context, a Action, automationID string) error {
+// actionDetail summarizes what the target actually did, so the journal shows
+// whether a command turned into a real transmission or was a no-op. A fan
+// command is suppressed by the firmware when it already believes the state is
+// the requested one, which otherwise looks like "the action ran but nothing
+// happened".
+func actionDetail(res map[string]any) string {
+	if res == nil {
+		return ""
+	}
+	if t, ok := res["transmitted"].([]string); ok {
+		if len(t) == 0 {
+			return " (sem transmissão: o device já estava no estado pedido)"
+		}
+		return " (transmitido: " + strings.Join(t, ",") + ")"
+	}
+	if mode, ok := res["mode"].(string); ok && mode != "" {
+		return " (" + mode + ")"
+	}
+	return ""
+}
+
+func (d *Dispatcher) runAction(ctx context.Context, a Action, automationID string, depth int) (map[string]any, error) {
 	switch a.Kind {
 	case ActionFan:
 		if a.Thing == "" || a.DeviceID == "" {
-			return fmt.Errorf("dispatch: fan action needs a thing and a device id (automation %s)", automationID)
+			return nil, fmt.Errorf("dispatch: fan action needs a thing and a device id (automation %s)", automationID)
 		}
-		// Hub.SetState serializa todos os comandos de ventilador e aplica o
-		// intervalo entre frames RF.
+		// Um ventilador aceita um comando por ação. As ações da regra começam
+		// em paralelo; o `delay` da regra é o que espaça frames RF.
 		state := fanState(a.State)
-		_, err := d.fans.SetState(ctx, a.Thing, a.DeviceID, state, false)
-		return err
+		device := a.Thing + "/" + a.DeviceID
+		echoes := fanEcho(state)
+		d.noteEchoes(device, echoes, automationID, depth+1)
+		res, err := d.fans.SetState(ctx, a.Thing, a.DeviceID, state, false)
+		if err != nil {
+			d.dropEchoes(device, echoes)
+			return nil, err
+		}
+		return res, nil
 	case ActionTuya:
 		if a.Device == "" || a.DP == "" {
-			return fmt.Errorf("dispatch: tuya action needs device and dp (automation %s)", automationID)
+			return nil, fmt.Errorf("dispatch: tuya action needs device and dp (automation %s)", automationID)
 		}
-		_, err := d.tuya.Control(ctx, a.Device, a.DP, a.Value)
-		return err
+		echoes := map[string]any{a.DP: a.Value}
+		d.noteEchoes(a.Device, echoes, automationID, depth+1)
+		res, err := d.tuya.Control(ctx, a.Device, a.DP, a.Value)
+		if err != nil {
+			d.dropEchoes(a.Device, echoes)
+			return nil, err
+		}
+		return res, nil
 	case ActionMidea:
 		if a.Device == "" {
-			return fmt.Errorf("dispatch: midea action needs a device (automation %s)", automationID)
+			return nil, fmt.Errorf("dispatch: midea action needs a device (automation %s)", automationID)
 		}
 		if d.midea == nil {
-			return fmt.Errorf("dispatch: midea control is not available (automation %s)", automationID)
+			return nil, fmt.Errorf("dispatch: midea control is not available (automation %s)", automationID)
 		}
-		_, err := d.midea.Apply(ctx, a.Device, a.State)
-		return err
+		d.noteEchoes(a.Device, a.State, automationID, depth+1)
+		res, err := d.midea.Apply(ctx, a.Device, a.State)
+		if err != nil {
+			d.dropEchoes(a.Device, a.State)
+			return nil, err
+		}
+		return res, nil
 	default:
-		return fmt.Errorf("dispatch: unknown action kind %q", a.Kind)
+		return nil, fmt.Errorf("dispatch: unknown action kind %q", a.Kind)
 	}
+}
+
+// echoKey identifies a pending echo by the device identity used by match
+// (owner/device for a fan, the device id for Tuya and Midea) and the dp/key.
+func echoKey(device, dp string) string { return device + "\x00" + dp }
+
+// noteEchoes records the states an automation action should produce, so the
+// resulting device events are attributed to the automation instead of the user.
+func (d *Dispatcher) noteEchoes(device string, vals map[string]any, automationID string, depth int) {
+	if len(vals) == 0 {
+		return
+	}
+	expires := d.now().Add(d.echoTTL)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for dp, v := range vals {
+		d.echoes[echoKey(device, dp)] = echo{
+			value:      normalize(v),
+			automation: automationID,
+			depth:      depth,
+			expires:    expires,
+		}
+	}
+}
+
+// dropEchoes removes echoes whose action failed, so a later real change is not
+// mistaken for the action's effect.
+func (d *Dispatcher) dropEchoes(device string, vals map[string]any) {
+	if len(vals) == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for dp := range vals {
+		delete(d.echoes, echoKey(device, dp))
+	}
+}
+
+// takeEcho consumes the pending echo for (device, dp) when the arriving value
+// matches it, returning the automation origin. A different or expired value
+// discards the echo and returns the zero (user) origin, so a real user change
+// is never mistaken for an echo.
+func (d *Dispatcher) takeEcho(device, dp string, val any) origin {
+	key := echoKey(device, dp)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	e, ok := d.echoes[key]
+	if !ok {
+		return origin{}
+	}
+	delete(d.echoes, key)
+	if d.now().After(e.expires) || !equal(e.value, val) {
+		return origin{}
+	}
+	return origin{automation: e.automation, depth: e.depth}
+}
+
+// fanEcho derives the states a fan command is expected to produce. The firmware
+// keeps power/speed/light consistent (power:false turns the motor and the light
+// off; speed>0 turns the motor on), so an automation that sets one field would
+// otherwise look like the user changed the derived ones.
+func fanEcho(state map[string]any) map[string]any {
+	out := make(map[string]any, len(state)+3)
+	for k, v := range state {
+		out[k] = v
+	}
+	if sp, ok := state["speed"]; ok {
+		if n, ok := asFloat(sp); ok {
+			if n > 0 {
+				out["power"] = true
+			} else {
+				out["power"] = false
+			}
+		}
+	}
+	if p, ok := state["power"].(bool); ok {
+		if p {
+			if _, has := state["speed"]; !has {
+				out["speed"] = float64(1)
+			}
+		} else {
+			out["speed"] = float64(0)
+			out["light"] = false
+		}
+	}
+	if _, ok := state["direction"]; ok {
+		if _, has := state["power"]; !has {
+			out["power"] = true
+		}
+		if _, has := state["speed"]; !has {
+			out["speed"] = float64(1)
+		}
+	}
+	return out
 }
 
 func (d *Dispatcher) changed(deviceID, dp string, val any) bool {
@@ -746,6 +971,23 @@ func (d *Dispatcher) remember(deviceID, dp string, val any) {
 	key := deviceID + "\x00" + dp
 	d.mu.Lock()
 	d.last[key] = val
+	d.mu.Unlock()
+}
+
+// isPrimed reports whether a device has already delivered its seeding snapshot,
+// so later snapshots are treated as reconnects whose deltas should fire.
+func (d *Dispatcher) isPrimed(deviceID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.primed[deviceID]
+}
+
+func (d *Dispatcher) markPrimed(deviceID string) {
+	d.mu.Lock()
+	if d.primed == nil {
+		d.primed = map[string]bool{}
+	}
+	d.primed[deviceID] = true
 	d.mu.Unlock()
 }
 

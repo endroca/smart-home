@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,12 +86,20 @@ type Service struct {
 	// observed holds data points seen while listening, used to render controls
 	// when the cloud specifications are not available.
 	observed map[string]map[string]db.Spec
+	// lastState is the last DP value published per device. Devices re-send the
+	// full DP set every few seconds; this is what lets the service publish only
+	// real changes instead of re-emitting an identical snapshot.
+	lastState map[string]map[string]any
 	// disabled holds devices the operator stopped listening to on purpose, so
 	// auto-listen does not restart them until an explicit start or a restart.
 	disabled map[string]bool
 	// lastEvents keeps the last event per device even after its listener ends,
 	// so the UI can still show the last error/telemetry.
 	lastEvents map[string]EventRecord
+	// eventLog keeps the most recent events per device (a bounded ring buffer),
+	// including the reconnect markers the listener emits, so the UI can answer
+	// "did this press actually arrive?" instead of showing only the last value.
+	eventLog map[string][]EventRecord
 	// lastSeen records the last time the hub heard from a device, so the UI can
 	// show a device as online even when it is not being streamed.
 	lastSeen map[string]time.Time
@@ -161,7 +170,7 @@ func Open(cfg Config) (*Service, error) {
 	if cfg.ScanTimeout <= 0 {
 		cfg.ScanTimeout = 5 * time.Second
 	}
-	s := &Service{store: cfg.Store, cfg: cfg, discover: tuya.Discover, listeners: map[string]*listener{}, observed: map[string]map[string]db.Spec{}, disabled: map[string]bool{}, lastEvents: map[string]EventRecord{}, lastSeen: map[string]time.Time{}, cloudOnly: map[string]bool{}, energyCache: map[string]energyCacheEntry{}, now: time.Now}
+	s := &Service{store: cfg.Store, cfg: cfg, discover: tuya.Discover, listeners: map[string]*listener{}, observed: map[string]map[string]db.Spec{}, lastState: map[string]map[string]any{}, disabled: map[string]bool{}, lastEvents: map[string]EventRecord{}, eventLog: map[string][]EventRecord{}, lastSeen: map[string]time.Time{}, cloudOnly: map[string]bool{}, energyCache: map[string]energyCacheEntry{}, now: time.Now}
 	if strings.TrimSpace(cfg.Cloud.AccessID) != "" && strings.TrimSpace(cfg.Cloud.AccessSecret) != "" {
 		cloud, err := tuya.NewCloud(cfg.Cloud)
 		if err != nil {
@@ -518,9 +527,11 @@ func (s *Service) Forget(ctx context.Context, id string) error {
 	s.StopListen(id)
 	s.mu.Lock()
 	delete(s.observed, id)
+	delete(s.lastState, id)
 	delete(s.disabled, id)
 	delete(s.lastEvents, id)
 	delete(s.lastSeen, id)
+	delete(s.eventLog, id)
 	s.mu.Unlock()
 	return s.store.DeleteDevice(ctx, id)
 }
@@ -1102,10 +1113,73 @@ func (s *Service) publishState(id string, dps map[string]any) {
 		return
 	}
 	s.markSeen(id)
+	// Feed the change cache so a DP report that repeats what we just published
+	// (or read) is not emitted again.
+	s.trackState(id, dps)
 	if s.bus == nil {
 		return
 	}
 	s.bus.PublishData("tuya", map[string]any{"device": id, "kind": "state", "dps": dps})
+}
+
+// trackState records the last DP values seen for a device and reports whether
+// any of them differs from the cached copy. Tuya devices re-send their whole DP
+// set every few seconds; without this the hub would re-publish an identical
+// snapshot each time and the UI would redraw (and drop in-flight edits) for
+// nothing.
+func (s *Service) trackState(id string, dps map[string]any) bool {
+	if len(dps) == 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev := s.lastState[id]
+	if prev == nil {
+		prev = make(map[string]any, len(dps))
+		s.lastState[id] = prev
+	}
+	changed := false
+	for dp, v := range dps {
+		if old, ok := prev[dp]; !ok || !sameDPValue(old, v) {
+			changed = true
+		}
+		prev[dp] = v
+	}
+	return changed
+}
+
+// sameDPValue compares two DP values, tolerating the numeric types the Tuya
+// protocol, JSON decoding and the database produce for the same number.
+func sameDPValue(a, b any) bool {
+	if reflect.DeepEqual(a, b) {
+		return true
+	}
+	af, aok := asFloat(a)
+	bf, bok := asFloat(b)
+	return aok && bok && af == bf
+}
+
+func asFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
 }
 
 func (s *Service) statusLAN(ctx context.Context, dev db.Device) (map[string]any, error) {
@@ -1282,6 +1356,64 @@ func (s *Service) LastEvent(id string) (EventRecord, bool) {
 	return e, ok
 }
 
+// eventLogCap bounds the per-device event ring buffer kept for the UI.
+const eventLogCap = 40
+
+// appendLogLocked records an event in the per-device ring buffer, dropping the
+// oldest entries once it is full. It must be called with s.mu held.
+func (s *Service) appendLogLocked(id string, e EventRecord) {
+	if s.eventLog == nil {
+		return
+	}
+	buf := append(s.eventLog[id], e)
+	if len(buf) > eventLogCap {
+		buf = append([]EventRecord(nil), buf[len(buf)-eventLogCap:]...)
+	}
+	s.eventLog[id] = buf
+}
+
+// RecentEvents returns up to n of the most recent events seen for a device, in
+// chronological order. It is what lets the UI show whether a press actually
+// arrived (and where a reconnect happened) instead of only the last value.
+func (s *Service) RecentEvents(id string, n int) []EventRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	buf := s.eventLog[id]
+	if n <= 0 || n > len(buf) {
+		n = len(buf)
+	}
+	out := make([]EventRecord, n)
+	copy(out, buf[len(buf)-n:])
+	return out
+}
+
+// SetCloudOnly switches a device between LAN listening and cloud polling. It is
+// the runtime half of the "Ler pela nuvem" toggle: turning it on stops the LAN
+// listener so the two sources never both fire the same press, and seeds the
+// report cursor to now so enabling the cloud never replays recent history into
+// automations; turning it off restarts the LAN listener.
+func (s *Service) SetCloudOnly(ctx context.Context, id string, cloudOnly bool) error {
+	if cloudOnly && s.cloud == nil {
+		return ErrCloudNotConfigured
+	}
+	if err := s.store.SetDeviceCloudOnly(ctx, id, cloudOnly); err != nil {
+		return err
+	}
+	if cloudOnly {
+		s.StopListen(id)
+		if s.cloud != nil {
+			_ = s.store.SetReportCursor(ctx, id, time.Now().UnixMilli())
+		}
+		return nil
+	}
+	// A device switched back to the LAN may still lack a key or address; let
+	// auto-listen pick it up later instead of failing the toggle.
+	if err := s.StartListen(ctx, id); err != nil && err != ErrNoKey && err != ErrNoIP {
+		return err
+	}
+	return nil
+}
+
 // markSeen records that the hub just heard from a device.
 func (s *Service) markSeen(id string) {
 	s.mu.Lock()
@@ -1328,6 +1460,7 @@ func (s *Service) appendEvent(id string, e EventRecord) {
 	l.last = e
 	l.hasLast = true
 	s.lastEvents[id] = e
+	s.appendLogLocked(id, e)
 	seen := e.At
 	if seen.IsZero() {
 		seen = time.Now()
@@ -1355,6 +1488,7 @@ func (s *Service) recordEvent(id string, e EventRecord) {
 	}
 	s.lastEvents[id] = e
 	s.lastSeen[id] = time.Now()
+	s.appendLogLocked(id, e)
 	fn := s.onEvent
 	s.mu.Unlock()
 
@@ -1384,6 +1518,13 @@ func (s *Service) observe(id string, e EventRecord) {
 		m[dp] = db.Spec{DeviceID: id, DPID: dp, Code: dp, Type: inferType(v), Writable: true}
 	}
 	s.mu.Unlock()
+
+	// Devices re-send their whole DP set every few seconds. Persisting and
+	// re-publishing an unchanged snapshot only makes the UI redraw (and drop
+	// edits in progress), so stop here unless something actually moved.
+	if !s.trackState(id, e.DPs) {
+		return
+	}
 
 	// Persist the current state; it is read by the UI even when not listening.
 	_ = s.store.SetStates(context.Background(), id, e.DPs)

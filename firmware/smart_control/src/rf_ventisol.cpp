@@ -295,12 +295,14 @@ static void processCapturedFrame() {
   lastFrameAt = millis();
   rxCount++;
 
+  // A 4a parte (B3) carrega o contador/rolling code. Ela muda a cada pressao e
+  // nao identifica o comando; o checksum do nibble baixo e medido so como
+  // diagnostico (rxChecksumFail), sem descartar o frame por causa dele.
   uint8_t highNibble = decoded[3] >> 4;
   uint8_t expectedLow = highNibble ^ ((decoded[2] & 0x0F) ^ 0x07);
   if ((decoded[3] & 0x0F) != expectedLow) {
     rxChecksumFail++;
-    Serial.printf("[rf] frame com checksum invalido: %s\n", hex);
-    return;
+    Serial.printf("[rf] checksum divergente (ignorado): %s\n", hex);
   }
 
   if (learning) {
@@ -334,19 +336,15 @@ static void processCapturedFrame() {
     return;
   }
 
-  // O contador so desempata quando ha um unico candidato forte. Se dois fans
-  // compartilham o mesmo frame e nao ha como distinguir, ignora o frame em vez
-  // de atualizar o ventilador errado.
-  int strongFan = -1;
-  int strongCommand = -1;
-  int weakFan = -1;
-  int weakCommand = -1;
-  uint8_t strongCount = 0;
-  uint8_t weakCount = 0;
+  // O comando e identificado apenas pelas 3 primeiras partes do frame
+  // (B0/B1/B2). A 4a parte e o contador/rolling code e nao entra na comparacao:
+  // quando o rolling code do controle divergia do nosso, o frame era tratado
+  // como candidato "fraco" e podia ser descartado.
+  int matchedFan = -1;
+  int matchedCommand = -1;
 
   for (uint8_t fan = 0; fan < state_fanCount(); fan++) {
     const FanConfig &cfg = state_config(fan);
-    uint8_t currentCounter = state_get(fan).counter & 0x07;
     for (uint8_t command = 0; command < COMMAND_COUNT; command++) {
       if (!cfg.hasCommand[command]) continue;
       if (decoded[0] != cfg.command[command][0] ||
@@ -354,40 +352,19 @@ static void processCapturedFrame() {
           decoded[2] != cfg.command[command][2]) {
         continue;
       }
-      uint8_t stateIndex = (highNibble - cfg.stateOffset[command]) & 0x07;
-      if (stateIndex == currentCounter) {
-        strongCount++;
-        if (strongFan < 0) {
-          strongFan = fan;
-          strongCommand = command;
-        }
-      } else {
-        weakCount++;
-        if (weakFan < 0) {
-          weakFan = fan;
-          weakCommand = command;
-        }
+      if (matchedFan < 0) {
+        matchedFan = fan;
+        matchedCommand = command;
+      } else if (matchedFan != fan) {
+        // O mesmo frame casa com ventiladores diferentes e, sem o contador para
+        // desempatar, nao ha como escolher: ignora em vez de errar o alvo.
+        Serial.printf("[rf] frame ambiguo entre ventiladores: %s\n", hex);
+        return;
       }
     }
   }
 
-  int matchedFan = -1;
-  int matchedCommand = -1;
-  if (strongCount == 1) {
-    matchedFan = strongFan;
-    matchedCommand = strongCommand;
-  } else if (strongCount > 1) {
-    Serial.printf("[rf] frame ambiguo (%u candidatos fortes): %s\n",
-                  (unsigned)strongCount, hex);
-    return;
-  } else if (weakCount == 1) {
-    matchedFan = weakFan;
-    matchedCommand = weakCommand;
-  } else if (weakCount > 1) {
-    Serial.printf("[rf] frame ambiguo (%u candidatos): %s\n",
-                  (unsigned)weakCount, hex);
-    return;
-  } else {
+  if (matchedFan < 0) {
     rxUnmatched++;
     Serial.printf("[rf] frame sem comando aprendido: %s\n", hex);
     return;
@@ -403,6 +380,12 @@ static void processCapturedFrame() {
   lastDebounceCommand = (uint8_t)matchedCommand;
   lastDebounceAt = now;
 
+  // O nibble alto do B3 e o "state", nao o contador: o comando tem um offset
+  // proprio (stateOffset) que o transmitLearned soma de novo ao montar o frame.
+  // Para os proximos TX nao repetirem o ultimo frame que o ventilador viu, o
+  // contador observado e convertido de volta tirando esse offset; sem isso o
+  // offset seria aplicado em dobro e desandaria o contador de quem tem offset
+  // diferente de zero (por exemplo power/vent do fan0).
   uint8_t counter =
       ((highNibble - state_config(matchedFan).stateOffset[matchedCommand]) + 1) &
       0x07;

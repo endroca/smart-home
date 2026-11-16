@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"smart_home/hub/internal/db"
+	"smart_home/hub/internal/functions"
 )
 
 // Action names understood by the voice service.
@@ -117,6 +118,10 @@ type Catalog struct {
 	Tuya   []db.Device
 	Midea  []db.Device
 	Scenes []Scene
+	// Functions is the effective function catalog of each device (labels the
+	// voice matches against), keyed by device id. Empty when no function
+	// service is attached.
+	Functions map[string][]functions.Function
 }
 
 // Store reads the rooms and devices the resolver matches against.
@@ -154,6 +159,13 @@ type SceneRunner interface {
 	Run(ctx context.Context, id string) (int, error)
 }
 
+// FunctionSource gives the effective function catalog of a device (the labels
+// the voice matches and the "off" actions). It is implemented by the functions
+// service.
+type FunctionSource interface {
+	Catalog(ctx context.Context, deviceID string) (*functions.Catalog, error)
+}
+
 // Interpreter is the optional natural-language fallback (a cloud LLM). It
 // receives the transcript and the current catalog and returns a Command, which
 // is then resolved and executed exactly like a locally parsed one.
@@ -175,15 +187,16 @@ type STTInfo struct {
 
 // Service resolves and executes voice commands.
 type Service struct {
-	store   Store
-	scenes  SceneSource
-	fans    FanSetter
-	tuya    TuyaController
-	midea   MideaController
-	runner  SceneRunner
-	llm     Interpreter
-	stt     Transcriber
-	sttInfo STTInfo
+	store     Store
+	scenes    SceneSource
+	fans      FanSetter
+	tuya      TuyaController
+	midea     MideaController
+	runner    SceneRunner
+	llm       Interpreter
+	stt       Transcriber
+	sttInfo   STTInfo
+	functions FunctionSource
 }
 
 // New builds the voice service. Any dependency may be nil in tests.
@@ -194,6 +207,10 @@ func New(store Store, scenes SceneSource, fans FanSetter, tuya TuyaController, r
 // SetMidea attaches the Midea controller so "liga o ar" reaches an air
 // conditioner.
 func (s *Service) SetMidea(m MideaController) { s.midea = m }
+
+// SetFunctions attaches the function catalog, so a phrase can match the labels
+// the operator configured on a device instead of the built-in rules.
+func (s *Service) SetFunctions(f FunctionSource) { s.functions = f }
 
 // SetInterpreter attaches the optional cloud LLM fallback. When nil the service
 // is fully local.
@@ -310,6 +327,23 @@ func (s *Service) loadCatalog(ctx context.Context) (*Catalog, error) {
 		}
 		cat.Scenes = sc
 	}
+	if s.functions != nil {
+		cat.Functions = map[string][]functions.Function{}
+		for _, list := range [][]db.Device{cat.Fans, cat.Tuya, cat.Midea} {
+			for _, d := range list {
+				if _, ok := cat.Functions[d.ID]; ok {
+					continue
+				}
+				// A missing/failed catalog must not break voice: the device just
+				// falls back to the built-in rules.
+				c, err := s.functions.Catalog(ctx, d.ID)
+				if err != nil {
+					continue
+				}
+				cat.Functions[d.ID] = c.Functions
+			}
+		}
+	}
 	return cat, nil
 }
 
@@ -318,6 +352,11 @@ func (s *Service) loadCatalog(ctx context.Context) (*Catalog, error) {
 func (s *Service) resolve(ctx context.Context, cmd Command, cat *Catalog) (*Plan, []Candidate) {
 	switch cmd.Action {
 	case ActionPower, ActionLight, ActionSpeed, ActionClimate:
+		// Labels first: a configured function name wins over the built-in
+		// rules, so voice depends on what the operator named, not on the hub.
+		if p, cands := s.resolveByLabel(cmd, cat); p != nil || len(cands) > 0 {
+			return p, cands
+		}
 		// A named scene wins only when no device noun was spoken, so a scene
 		// called "Sala" never shadows "liga a luz da sala".
 		if cmd.Noun == "" && cmd.Action != ActionSpeed {
@@ -338,6 +377,200 @@ func (s *Service) resolve(ctx context.Context, cmd Command, cat *Catalog) (*Plan
 		return nil, nil
 	}
 	return nil, nil
+}
+
+// resolveByLabel matches the phrase against the labels and aliases the operator
+// configured on each function. The most specific (longest) match wins; when two
+// devices match equally it reports the candidates instead of guessing.
+func (s *Service) resolveByLabel(cmd Command, cat *Catalog) (*Plan, []Candidate) {
+	if len(cat.Functions) == 0 {
+		return nil, nil
+	}
+	roomID, _ := roomOf(cmd, cat.Rooms)
+
+	type hit struct {
+		kind  string
+		dev   db.Device
+		fn    functions.Function
+		score int
+		value any
+	}
+	var hits []hit
+
+	consider := func(kind string, d db.Device) {
+		if roomID != "" && d.RoomID != roomID {
+			return
+		}
+		for _, fn := range cat.Functions[d.ID] {
+			if !fn.Voice {
+				continue
+			}
+			score := 0
+			for _, name := range append([]string{fn.Label}, fn.Aliases...) {
+				n := normalize(name)
+				if n != "" && containsWord(cmd.Raw, n) && len(n) > score {
+					score = len(n)
+				}
+			}
+			if score == 0 {
+				continue
+			}
+			value, ok := functionValue(cmd, fn)
+			if !ok {
+				continue
+			}
+			hits = append(hits, hit{kind: kind, dev: d, fn: fn, score: score, value: value})
+		}
+	}
+
+	for _, d := range cat.Fans {
+		consider(KindFan, d)
+	}
+	for _, d := range cat.Tuya {
+		consider(KindTuya, d)
+	}
+	for _, d := range cat.Midea {
+		consider(KindMidea, d)
+	}
+	if len(hits) == 0 {
+		return nil, nil
+	}
+
+	best := 0
+	for _, h := range hits {
+		if h.score > best {
+			best = h.score
+		}
+	}
+	var top []hit
+	devices := map[string]bool{}
+	for _, h := range hits {
+		if h.score != best {
+			continue
+		}
+		top = append(top, h)
+		devices[h.dev.ID] = true
+	}
+	if len(devices) > 1 {
+		out := make([]Candidate, 0, len(devices))
+		seen := map[string]bool{}
+		for _, h := range top {
+			if seen[h.dev.ID] {
+				continue
+			}
+			seen[h.dev.ID] = true
+			out = append(out, Candidate{
+				ID:    h.dev.ID,
+				Kind:  h.kind,
+				Label: labelOf(h.dev),
+				Room:  roomName(h.dev.RoomID, cat.Rooms),
+			})
+		}
+		return nil, out
+	}
+	// One device: pick the function with the most specific label.
+	pick := top[0]
+	for _, h := range top[1:] {
+		if len(normalize(h.fn.Label)) > len(normalize(pick.fn.Label)) {
+			pick = h
+		}
+	}
+	return s.functionPlan(pick.kind, pick.dev, pick.fn, pick.value, cat), nil
+}
+
+// functionValue derives the value to set from the parsed command, or reports
+// that the phrase does not carry enough to act.
+func functionValue(cmd Command, fn functions.Function) (any, bool) {
+	switch fn.Kind {
+	case functions.KindBool:
+		if cmd.Action == ActionPower || cmd.Action == ActionLight {
+			return cmd.On, true
+		}
+		return nil, false
+	case functions.KindNumber:
+		switch {
+		case cmd.Action == ActionSpeed:
+			return float64(cmd.Speed), true
+		case cmd.Action == ActionClimate && cmd.Between != nil:
+			return float64(*cmd.Between), true
+		default:
+			if n, ok := firstNumber(cmd.Raw); ok {
+				return float64(n), true
+			}
+			return nil, false
+		}
+	case functions.KindEnum:
+		for _, v := range fn.Values {
+			if v != "" && containsWord(cmd.Raw, normalize(v)) {
+				return v, true
+			}
+		}
+		return nil, false
+	default:
+		return nil, false
+	}
+}
+
+// firstNumber returns the first plain number in the phrase ("modo 2", "leve 3").
+func firstNumber(raw string) (int, bool) {
+	for _, w := range strings.Fields(raw) {
+		if n, ok := wordNumber(w); ok {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// functionPlan turns a matched function into an executable plan, reusing the
+// same execution paths as the built-in rules.
+func (s *Service) functionPlan(kind string, d db.Device, fn functions.Function, value any, cat *Catalog) *Plan {
+	label := labelOf(d)
+	p := &Plan{
+		Action:     "set",
+		Kind:       kind,
+		Label:      label,
+		Room:       roomName(d.RoomID, cat.Rooms),
+		Confidence: 0.9,
+		Provider:   ProviderRules,
+	}
+	switch kind {
+	case KindFan:
+		p.Thing = d.Owner
+		p.DeviceID = d.DeviceID
+		if fn.Key == "power" {
+			if on, ok := value.(bool); ok && on {
+				// The RF remote has no "power on": turning on means choosing a
+				// speed.
+				p.State = map[string]any{"speed": 1}
+				p.Speech = speechPower(label, true)
+				return p
+			}
+		}
+		p.State = map[string]any{fn.Key: value}
+	case KindTuya:
+		p.Device = d.ID
+		p.DP = fn.Key
+		p.Value = value
+	case KindMidea:
+		p.Device = d.ID
+		p.State = map[string]any{fn.Key: value}
+	}
+	p.Speech = speechFunction(label, fn, value)
+	return p
+}
+
+// speechFunction builds a short spoken confirmation for a function command.
+func speechFunction(label string, fn functions.Function, value any) string {
+	if b, ok := value.(bool); ok {
+		if fn.Key == "light" {
+			return speechLight(label, b)
+		}
+		return speechPower(label, b)
+	}
+	if n, ok := value.(float64); ok {
+		return fmt.Sprintf("%s: %s %g", label, fn.Label, n)
+	}
+	return fmt.Sprintf("%s: %s %v", label, fn.Label, value)
 }
 
 func (s *Service) devicePlan(ctx context.Context, cmd Command, cat *Catalog) (*Plan, []Candidate) {
@@ -765,6 +998,11 @@ func sttPrompt(cat *Catalog) string {
 		b.WriteString(strings.Join(phrases, ", "))
 		b.WriteString(". ")
 	}
+	if names := allFunctionLabels(cat, 16); len(names) > 0 {
+		b.WriteString("Funções: ")
+		b.WriteString(strings.Join(names, ", "))
+		b.WriteString(". ")
+	}
 	if len(cat.Scenes) > 0 {
 		b.WriteString("Cenas: ")
 		for i, sc := range cat.Scenes {
@@ -802,6 +1040,49 @@ func roomArticle(name string) string {
 		return "da"
 	}
 	return "do"
+}
+
+// functionLabels lists the distinct voice labels of a function catalog, capped
+// at limit, so a prompt can prime the model with them.
+func functionLabels(fns []functions.Function, limit int) []string {
+	out := make([]string, 0, len(fns))
+	seen := map[string]bool{}
+	for _, f := range fns {
+		if !f.Voice {
+			continue
+		}
+		l := strings.TrimSpace(f.Label)
+		if l == "" || seen[strings.ToLower(l)] {
+			continue
+		}
+		seen[strings.ToLower(l)] = true
+		out = append(out, l)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+// allFunctionLabels lists distinct voice labels across every device, capped at
+// limit.
+func allFunctionLabels(cat *Catalog, limit int) []string {
+	out := make([]string, 0, limit)
+	seen := map[string]bool{}
+	for _, d := range append(append(append([]db.Device{}, cat.Fans...), cat.Tuya...), cat.Midea...) {
+		for _, l := range functionLabels(cat.Functions[d.ID], limit) {
+			k := strings.ToLower(l)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, l)
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 func speechPower(label string, on bool) string {

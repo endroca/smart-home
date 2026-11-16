@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"smart_home/hub/internal/db"
+	"smart_home/hub/internal/functions"
 )
 
 func TestParse(t *testing.T) {
@@ -360,5 +361,203 @@ func TestSystemPromptIncludesRoom(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "pode NÃO estar no nome") {
 		t.Fatalf("system prompt does not warn about the room:\n%s", prompt)
+	}
+}
+
+type fakeFunctions struct{ cats map[string]*functions.Catalog }
+
+func (f fakeFunctions) Catalog(_ context.Context, id string) (*functions.Catalog, error) {
+	if c, ok := f.cats[id]; ok {
+		return c, nil
+	}
+	return &functions.Catalog{DeviceID: id}, nil
+}
+
+func fnCatalog(deviceID string, fns ...functions.Function) *functions.Catalog {
+	return &functions.Catalog{DeviceID: deviceID, Configured: true, Functions: fns}
+}
+
+func boolFn(key, label string, aliases ...string) functions.Function {
+	return functions.Function{
+		Config: functions.Config{Key: key, Label: label, Aliases: aliases, Voice: true},
+		Driver: "tuya",
+		Kind:   functions.KindBool,
+	}
+}
+
+// TestResolveByConfiguredLabel checks a phrase matches the label the operator
+// configured instead of the built-in rules.
+func TestResolveByConfiguredLabel(t *testing.T) {
+	cat := &Catalog{
+		Tuya: []db.Device{{ID: "tuya-1", Kind: db.KindTuya, Name: "Tomada PC", RoomID: "sala"}},
+		Functions: map[string][]functions.Function{
+			"tuya-1": {boolFn("1", "Tomada do PC", "pc")},
+		},
+	}
+	s := New(nil, nil, nil, nil, nil)
+	plan, cands := s.resolve(context.Background(), Parse("liga a tomada do pc"), cat)
+	if plan == nil || len(cands) != 0 {
+		t.Fatalf("plan=%+v cands=%+v", plan, cands)
+	}
+	if plan.Kind != KindTuya || plan.Device != "tuya-1" || plan.DP != "1" || plan.Value != true {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+}
+
+func TestResolveByAliasOff(t *testing.T) {
+	cat := &Catalog{
+		Tuya: []db.Device{{ID: "tuya-1", Kind: db.KindTuya, Name: "Tomada PC"}},
+		Functions: map[string][]functions.Function{
+			"tuya-1": {boolFn("1", "Tomada do PC", "pc")},
+		},
+	}
+	s := New(nil, nil, nil, nil, nil)
+	plan, _ := s.resolve(context.Background(), Parse("desliga o pc"), cat)
+	if plan == nil || plan.Value != false {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+}
+
+// TestResolveByLabelAmbiguous reports candidates when two devices carry the same
+// label.
+func TestResolveByLabelAmbiguous(t *testing.T) {
+	cat := &Catalog{
+		Tuya: []db.Device{
+			{ID: "tuya-1", Kind: db.KindTuya, Name: "Tomada A", RoomID: "sala"},
+			{ID: "tuya-2", Kind: db.KindTuya, Name: "Tomada B", RoomID: "quarto"},
+		},
+		Functions: map[string][]functions.Function{
+			"tuya-1": {boolFn("1", "Tomada do PC")},
+			"tuya-2": {boolFn("1", "Tomada do PC")},
+		},
+	}
+	s := New(nil, nil, nil, nil, nil)
+	plan, cands := s.resolve(context.Background(), Parse("liga a tomada do pc"), cat)
+	if plan != nil || len(cands) != 2 {
+		t.Fatalf("expected 2 candidates, plan=%+v cands=%+v", plan, cands)
+	}
+}
+
+// TestResolveByLabelRoomNarrows checks the room hint disambiguates the label.
+func TestResolveByLabelRoomNarrows(t *testing.T) {
+	cat := &Catalog{
+		Rooms: []db.Room{{ID: "quarto", Name: "Quarto"}},
+		Tuya: []db.Device{
+			{ID: "tuya-1", Kind: db.KindTuya, Name: "Tomada A", RoomID: "sala"},
+			{ID: "tuya-2", Kind: db.KindTuya, Name: "Tomada B", RoomID: "quarto"},
+		},
+		Functions: map[string][]functions.Function{
+			"tuya-1": {boolFn("1", "Tomada do PC")},
+			"tuya-2": {boolFn("1", "Tomada do PC")},
+		},
+	}
+	s := New(nil, nil, nil, nil, nil)
+	plan, cands := s.resolve(context.Background(), Parse("liga a tomada do pc do quarto"), cat)
+	if plan == nil || len(cands) != 0 {
+		t.Fatalf("plan=%+v cands=%+v", plan, cands)
+	}
+	if plan.Device != "tuya-2" {
+		t.Fatalf("room hint should pick the quarto device: %+v", plan)
+	}
+}
+
+// TestResolveByLabelFallsBackToRules checks that without a matching label the
+// built-in resolver still runs.
+func TestResolveByLabelFallsBackToRules(t *testing.T) {
+	cat := &Catalog{
+		Tuya: []db.Device{{ID: "tuya-1", Kind: db.KindTuya, Name: "Tomada"}},
+		Functions: map[string][]functions.Function{
+			"tuya-1": {boolFn("1", "Tomada do PC")},
+		},
+	}
+	tuya := fakeTuya{specs: []db.Spec{{DPID: "1", Code: "switch_1", Type: "Boolean", Writable: true}}}
+	s := New(nil, nil, nil, tuya, nil)
+	plan, _ := s.resolve(context.Background(), Parse("liga a tomada"), cat)
+	if plan == nil || plan.Kind != KindTuya || plan.Value != true {
+		t.Fatalf("legacy resolver should have run: %+v", plan)
+	}
+}
+
+// TestResolveByLabelSpeed checks a number label resolves to the spoken number.
+func TestResolveByLabelSpeed(t *testing.T) {
+	cat := &Catalog{
+		Fans: []db.Device{{ID: "gw/fan0", Kind: db.KindFan, Owner: "gw", DeviceID: "fan0", Name: "Ventilador"}},
+		Functions: map[string][]functions.Function{
+			"gw/fan0": {{
+				Config: functions.Config{Key: "speed", Label: "Velocidade", Voice: true},
+				Driver: "fan", Kind: functions.KindNumber,
+			}},
+		},
+	}
+	s := New(nil, nil, nil, nil, nil)
+	plan, _ := s.resolve(context.Background(), Parse("velocidade 4"), cat)
+	if plan == nil || plan.Kind != KindFan || plan.State["speed"] != float64(4) {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+}
+
+// TestCatalogFunctionsLoadsFromSource checks loadCatalog fills the function map.
+func TestCatalogFunctionsLoadsFromSource(t *testing.T) {
+	store := fakeStore{fans: []db.Device{{ID: "gw/fan0", Kind: db.KindFan, Owner: "gw", DeviceID: "fan0", Name: "Ventilador"}}}
+	s := New(store, nil, nil, nil, nil)
+	s.SetFunctions(fakeFunctions{cats: map[string]*functions.Catalog{
+		"gw/fan0": fnCatalog("gw/fan0", boolFn("power", "Ligar/desligar")),
+	}})
+	cat, err := s.loadCatalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Functions["gw/fan0"]) != 1 {
+		t.Fatalf("functions not loaded: %+v", cat.Functions)
+	}
+}
+
+// TestResolvePhraseComposition covers the usual shape "ação + label + cômodo":
+// "ligar luz da sala" = ligar (ação), luz (label da função) e sala (cômodo).
+func TestResolvePhraseComposition(t *testing.T) {
+	cat := &Catalog{
+		Rooms: []db.Room{{ID: "sala", Name: "Sala"}},
+		Fans: []db.Device{
+			{ID: "gw/fan0", Kind: db.KindFan, Owner: "gw", DeviceID: "fan0", Name: "Ventilador", RoomID: "sala"},
+		},
+		Functions: map[string][]functions.Function{
+			"gw/fan0": {
+				{Config: functions.Config{Key: "light", Label: "Luz", Voice: true}, Driver: "fan", Kind: functions.KindBool},
+				{Config: functions.Config{Key: "power", Label: "Ligar/desligar", Voice: true}, Driver: "fan", Kind: functions.KindBool},
+			},
+		},
+	}
+	s := New(nil, nil, nil, nil, nil)
+	plan, cands := s.resolve(context.Background(), Parse("ligar luz da sala"), cat)
+	if plan == nil || len(cands) != 0 {
+		t.Fatalf("plan=%+v cands=%+v", plan, cands)
+	}
+	if plan.Kind != KindFan || plan.Thing != "gw" || plan.DeviceID != "fan0" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	if plan.State["light"] != true {
+		t.Fatalf("want the light on: %+v", plan.State)
+	}
+}
+
+// TestResolvePropertyComposition covers "ação + device + cômodo + propriedade":
+// "ligar ventilador da sala velocidade 1" = ligar, ventilador, sala, velocidade
+// (label) e 1 (valor).
+func TestResolvePropertyComposition(t *testing.T) {
+	cat := &Catalog{
+		Rooms: []db.Room{{ID: "sala", Name: "Sala"}},
+		Fans: []db.Device{
+			{ID: "gw/fan0", Kind: db.KindFan, Owner: "gw", DeviceID: "fan0", Name: "Ventilador", RoomID: "sala"},
+		},
+		Functions: map[string][]functions.Function{
+			"gw/fan0": {
+				{Config: functions.Config{Key: "speed", Label: "Velocidade", Voice: true}, Driver: "fan", Kind: functions.KindNumber},
+			},
+		},
+	}
+	s := New(nil, nil, nil, nil, nil)
+	plan, _ := s.resolve(context.Background(), Parse("ligar ventilador da sala velocidade 1"), cat)
+	if plan == nil || plan.Kind != KindFan || plan.State["speed"] != float64(1) {
+		t.Fatalf("unexpected plan: %+v", plan)
 	}
 }

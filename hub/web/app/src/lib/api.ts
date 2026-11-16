@@ -6,9 +6,11 @@
 
 import type {
   Automation,
+  DeviceFunction,
   DeviceRow,
   FirmwareFile,
   FirmwareInfo,
+  FunctionCatalog,
   Health,
   MideaDevice,
   MideaScanDevice,
@@ -143,6 +145,22 @@ export const realApi = {
     request<{ series?: unknown[]; range?: string }>(`/api/midea/energy?id=${encodeURIComponent(id)}&range=${encodeURIComponent(range)}`),
 
   voiceCommand: (text: string) => request("/api/voice/command", { method: "POST", body: { text } }),
+
+  // Catalogo de funcoes do device: rotulos para a voz e acoes de "desligar
+  // tudo". Derivado das capacidades quando nao foi configurado.
+  deviceFunctions: (id: string) =>
+    request<{ catalog: FunctionCatalog }>(`/api/devices/${encodeURIComponent(id)}/functions`),
+  saveDeviceFunctions: (id: string, functions: DeviceFunction[]) =>
+    request<{ catalog: FunctionCatalog }>(`/api/devices/${encodeURIComponent(id)}/functions`, {
+      method: "PUT",
+      body: { functions },
+    }),
+  // Restaura os padroes derivados (limpa a configuracao explicita).
+  resetDeviceFunctions: (id: string) =>
+    request<{ catalog: FunctionCatalog }>(`/api/devices/${encodeURIComponent(id)}/functions`, {
+      method: "PUT",
+      body: {},
+    }),
 };
 
 export type Api = typeof realApi;

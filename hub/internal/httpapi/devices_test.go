@@ -11,6 +11,7 @@ import (
 
 	"smart_home/hub/internal/config"
 	"smart_home/hub/internal/db"
+	"smart_home/hub/internal/functions"
 	"smart_home/hub/internal/hub"
 )
 
@@ -25,7 +26,9 @@ func dbServer(t *testing.T) (*httptest.Server, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(h, cfg, store).Handler())
+	api := New(h, cfg, store)
+	api.SetFunctions(functions.New(store, h))
+	srv := httptest.NewServer(api.Handler())
 	return srv, func() {
 		srv.Close()
 		store.Close()
@@ -156,5 +159,87 @@ func TestDeviceTemplateRoute(t *testing.T) {
 	}
 	if code := doJSON(t, http.MethodGet, srv.URL+"/api/devices/plug", "", &cleared); code != 200 || cleared.Device.Template != "" {
 		t.Fatalf("template not cleared: %+v (status %d)", cleared.Device, code)
+	}
+}
+
+func TestDeviceOrderRoute(t *testing.T) {
+	srv, closeFn := dbServer(t)
+	defer closeFn()
+
+	for _, d := range []string{
+		`{"id":"r1","name":"Sala"}`,
+	} {
+		if code := doJSON(t, http.MethodPost, srv.URL+"/api/rooms", d, nil); code != 200 {
+			t.Fatalf("create room status=%d", code)
+		}
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if code := doJSON(t, http.MethodPost, srv.URL+"/api/devices", `{"id":"`+id+`","kind":"tuya"}`, nil); code != 200 {
+			t.Fatalf("create %s status=%d", id, code)
+		}
+		if code := doJSON(t, http.MethodPost, srv.URL+"/api/devices/"+id, `{"room_id":"r1"}`, nil); code != 200 {
+			t.Fatalf("assign %s status=%d", id, code)
+		}
+	}
+
+	// Reorder within the room.
+	if code := doJSON(t, http.MethodPost, srv.URL+"/api/devices/order", `{"ids":["c","a","b"]}`, nil); code != 200 {
+		t.Fatalf("order status=%d", code)
+	}
+	var got struct {
+		Device struct {
+			Sort int `json:"sort"`
+		} `json:"device"`
+	}
+	for id, want := range map[string]int{"c": 0, "a": 1, "b": 2} {
+		if code := doJSON(t, http.MethodGet, srv.URL+"/api/devices/"+id, "", &got); code != 200 {
+			t.Fatalf("get %s status=%d", id, code)
+		}
+		if got.Device.Sort != want {
+			t.Fatalf("%s sort=%d, want %d", id, got.Device.Sort, want)
+		}
+	}
+
+	// An unknown id is a 404 and a mixed-room order is a 400.
+	if code := doJSON(t, http.MethodPost, srv.URL+"/api/devices/order", `{"ids":["a","ghost"]}`, nil); code != 404 {
+		t.Fatalf("unknown id status=%d, want 404", code)
+	}
+	if code := doJSON(t, http.MethodPost, srv.URL+"/api/devices/order", `{"ids":[]}`, nil); code != 400 {
+		t.Fatalf("empty order status=%d, want 400", code)
+	}
+}
+
+func TestDeviceFunctionsRoute(t *testing.T) {
+	srv, closeFn := dbServer(t)
+	defer closeFn()
+
+	if code := doJSON(t, http.MethodPost, srv.URL+"/api/devices", `{"id":"plug","kind":"tuya"}`, nil); code != 200 {
+		t.Fatalf("create device status=%d", code)
+	}
+
+	// Without specs the catalog is empty but still answers 200.
+	var empty struct {
+		Catalog struct {
+			Configured bool `json:"configured"`
+			Functions  []struct {
+				Key string `json:"key"`
+			} `json:"functions"`
+		} `json:"catalog"`
+	}
+	if code := doJSON(t, http.MethodGet, srv.URL+"/api/devices/plug/functions", "", &empty); code != 200 {
+		t.Fatalf("empty catalog status=%d", code)
+	}
+	if empty.Catalog.Configured || len(empty.Catalog.Functions) != 0 {
+		t.Fatalf("unexpected empty catalog: %+v", empty.Catalog)
+	}
+
+	// Unknown device is a 404.
+	if code := doJSON(t, http.MethodGet, srv.URL+"/api/devices/ghost/functions", "", nil); code != 404 {
+		t.Fatalf("unknown device status=%d, want 404", code)
+	}
+
+	// A key that is not a known function is a 400.
+	if code := doJSON(t, http.MethodPut, srv.URL+"/api/devices/plug/functions", `{"functions":[{"key":"ghost","label":"x"}]}`, nil); code != 400 {
+		t.Fatalf("bad function status=%d, want 400", code)
 	}
 }

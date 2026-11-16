@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import Sheet from "./Sheet.svelte";
   import AsyncButton from "./AsyncButton.svelte";
   import { toast } from "$lib/stores/toast.svelte";
@@ -19,9 +20,19 @@
 
   let text = $state("");
   let busy = $state(false);
+  let wasOpen = false;
 
+  // O texto so e semeado na ABERTURA da folha. Re-semea-lo a cada mudanca de
+  // `value` apagava o que o operador estava editando (o hub atualiza o estado
+  // enquanto a folha esta aberta).
   $effect(() => {
-    if (open) text = JSON.stringify(value, null, 2);
+    const isOpen = open;
+    if (isOpen && !wasOpen) {
+      untrack(() => {
+        text = JSON.stringify(value, null, 2);
+      });
+    }
+    wasOpen = isOpen;
   });
 
   async function save() {
